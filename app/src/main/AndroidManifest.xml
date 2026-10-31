@@ -7,16 +7,21 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Location (Google Maps walking navigation) -->
+    <!-- Location (Google Maps & OpenStreetMap walking navigation) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!-- NFC (medicine tag reading) -->
     <uses-permission android:name="android.permission.NFC" />
 
+    <!-- Voice Navigation & Speech Commands -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- Hardware features -->
     <uses-feature android:name="android.hardware.camera"          android:required="true" />
-    <uses-feature android:name="android.hardware.nfc"              android:required="false" />
+    <uses-feature android:name="android.hardware.microphone"      android:required="false" />
+    <uses-feature android:name="android.hardware.nfc"             android:required="false" />
     <uses-feature android:name="android.hardware.location.gps"    android:required="false" />
 
     <application

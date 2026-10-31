@@ -49,13 +49,13 @@ final class AppSettings {
         onlineModeEnabled  = prefs.getBoolean("onlineModeEnabled", false);
         roboflowApiKey     = prefs.getString("roboflowApiKey",   "");
 
-        navigationEnabled  = prefs.getBoolean("navigationEnabled", false);
+        navigationEnabled  = prefs.getBoolean("navigationEnabled", true);
         mapsApiKey         = prefs.getString("mapsApiKey",        "");
 
         nfcEnabled         = prefs.getBoolean("nfcEnabled",  true);
 
-        ocrEnabled         = prefs.getBoolean("ocrEnabled",   false);
-        ocrIntervalMs      = prefs.getInt("ocrIntervalMs",    3000);
+        ocrEnabled         = prefs.getBoolean("ocrEnabled",   true);
+        ocrIntervalMs      = prefs.getInt("ocrIntervalMs",    2500);
     }
 
     void save() {
@@ -86,9 +86,9 @@ final class AppSettings {
         edgeIgnoreRatio   = 0.18f;
         priorityOverride  = true;
         onlineModeEnabled = false;
-        navigationEnabled = false;
+        navigationEnabled = true;
         nfcEnabled        = true;
-        ocrEnabled        = false;
+        ocrEnabled        = true;
         ocrIntervalMs     = 3000;
         // Note: API keys are NOT reset to avoid losing credentials
         save();

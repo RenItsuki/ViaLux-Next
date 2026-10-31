@@ -26,11 +26,11 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
     }
 
     void speak(String message, boolean emergency, int priority) {
-        if (!ready || tts == null) {
+        if (!ready || tts == null || message == null || message.trim().isEmpty()) {
             return;
         }
         long now = System.currentTimeMillis();
-        if (message.equals(lastMessage) && now - lastStartedAt < 8000) {
+        if (message.equals(lastMessage) && now - lastStartedAt < 6000 && !emergency) {
             return;
         }
         if (tts.isSpeaking() && !emergency && priority < Guidance.PRIORITY_URGENT) {
@@ -42,6 +42,31 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
                 ? TextToSpeech.QUEUE_FLUSH
                 : TextToSpeech.QUEUE_ADD;
         tts.speak(message, mode, null, "vision-guide-" + System.nanoTime());
+    }
+
+    /** Speak immediately bypassing cooldown, used for voice commands, OCR reading, and repeating. */
+    void forceSpeak(String message, boolean flush) {
+        if (!ready || tts == null || message == null || message.trim().isEmpty()) {
+            return;
+        }
+        lastMessage = message;
+        lastStartedAt = System.currentTimeMillis();
+        int mode = flush ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
+        tts.speak(message, mode, null, "vision-guide-force-" + System.nanoTime());
+    }
+
+    void stopSpeaking() {
+        if (tts != null && tts.isSpeaking()) {
+            tts.stop();
+        }
+    }
+
+    boolean isSpeaking() {
+        return tts != null && tts.isSpeaking();
+    }
+
+    String getLastMessage() {
+        return lastMessage;
     }
 
     void shutdown() {

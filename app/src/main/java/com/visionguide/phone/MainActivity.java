@@ -78,6 +78,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private ProcessCameraProvider cameraProvider;
     private ExecutorService cameraExecutor;
+    private ExecutorService stairExecutor;
     private ExecutorService onlineExecutor;
     private ConnectivityManager connectivityManager;
 
@@ -111,6 +112,7 @@ public final class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         cameraExecutor  = Executors.newSingleThreadExecutor();
+        stairExecutor   = Executors.newSingleThreadExecutor();
         onlineExecutor  = Executors.newSingleThreadExecutor();
         speechGuide     = new SpeechGuide(this);
         guidanceEngine  = new GuidanceEngine();
@@ -154,6 +156,7 @@ public final class MainActivity extends AppCompatActivity {
         if (ocrProcessor   != null) ocrProcessor.shutdown();
         if (navigationGuide != null) navigationGuide.stop();
         if (cameraExecutor != null) cameraExecutor.shutdownNow();
+        if (stairExecutor  != null) stairExecutor.shutdownNow();
         if (onlineExecutor != null) onlineExecutor.shutdownNow();
         if (detector != null) { try { detector.close(); } catch (Exception ignored) {} }
         if (stairDetector != null) { try { stairDetector.close(); } catch (Exception ignored) {} }
@@ -416,17 +419,40 @@ public final class MainActivity extends AppCompatActivity {
             int width  = bitmap.getWidth();
             int height = bitmap.getHeight();
 
-            // ── Local inference ─────────────────────────────────────────
-            List<Detection> local = localDetector.detect(bitmap);
-
-            // ── StairVision offline stair detection ─────────────────────
-            StairVisionDetector localStairDetector = stairDetector;
+            // ── Parallel on-device dual-model inference ───────────────────
+            // Run StairVision concurrently on stairExecutor with YOLO26n on cameraExecutor
+            final StairVisionDetector localStairDetector = stairDetector;
+            java.util.concurrent.Future<List<Detection>> stairFuture = null;
             if (localStairDetector != null) {
-                List<Detection> stairDetections = localStairDetector.detect(bitmap);
-                if (!stairDetections.isEmpty()) {
-                    local = DetectionMerger.merge(local, stairDetections);
-                }
+                stairFuture = stairExecutor.submit(() -> {
+                    try {
+                        return localStairDetector.detect(bitmap);
+                    } catch (Exception e) {
+                        return Collections.emptyList();
+                    }
+                });
             }
+
+            // Run YOLO26n (general objects: people, vehicles, obstacles, etc.)
+            List<Detection> yoloDetections = Collections.emptyList();
+            try {
+                if (localDetector != null) {
+                    yoloDetections = localDetector.detect(bitmap);
+                }
+            } catch (Exception e) {
+                // Keep resilient
+            }
+
+            // Collect StairVision results (stairs: ascending, descending, side-view)
+            List<Detection> stairDetections = Collections.emptyList();
+            if (stairFuture != null) {
+                try {
+                    stairDetections = stairFuture.get();
+                } catch (Exception ignored) {}
+            }
+
+            // Merge both on-device models working alongside each other
+            List<Detection> local = DetectionMerger.merge(yoloDetections, stairDetections);
 
             // ── Online inference (throttled, non-blocking) ──────────────
             if (settings.onlineModeEnabled

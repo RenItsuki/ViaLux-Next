@@ -16,6 +16,7 @@ public final class OverlayView extends View {
     private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint movingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint stillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint hazardPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final List<Detection> detections = new ArrayList<>();
     private GuidanceEngine guidanceEngine;
@@ -43,6 +44,10 @@ public final class OverlayView extends View {
         stillPaint.setColor(Color.rgb(70, 215, 170));
         stillPaint.setStyle(Paint.Style.STROKE);
         stillPaint.setStrokeWidth(5f);
+
+        hazardPaint.setColor(Color.rgb(255, 90, 80));
+        hazardPaint.setStyle(Paint.Style.STROKE);
+        hazardPaint.setStrokeWidth(6f);
 
         textPaint.setColor(Color.WHITE);
         textPaint.setTextSize(36f);
@@ -72,7 +77,8 @@ public final class OverlayView extends View {
         float scaleY = h / imageHeight;
         for (Detection detection : detections) {
             boolean moving = guidanceEngine != null && guidanceEngine.isMoving(detection, imageWidth, imageHeight);
-            Paint boxPaint = moving ? movingPaint : stillPaint;
+            boolean isHazard = GuidanceEngine.isHazardLabel(detection.label);
+            Paint boxPaint = isHazard ? hazardPaint : (moving ? movingPaint : stillPaint);
             RectF mapped = new RectF(
                     detection.box.left * scaleX,
                     detection.box.top * scaleY,
@@ -81,8 +87,9 @@ public final class OverlayView extends View {
             );
             canvas.drawRect(mapped, boxPaint);
             String cell = GuidanceEngine.gridCellFor(detection, imageWidth, imageHeight);
-            String text = String.format(Locale.US, "%s %.0f%% | %s | %s",
-                    detection.label, detection.confidence * 100f, cell, moving ? "moving" : "still");
+            String prefix = isHazard ? "⚠️ " : "";
+            String text = String.format(Locale.US, "%s%s %.0f%% | %s | %s",
+                    prefix, detection.label, detection.confidence * 100f, cell, moving ? "moving" : "still");
             canvas.drawText(text, mapped.left, Math.max(42f, mapped.top - 10f), textPaint);
         }
     }

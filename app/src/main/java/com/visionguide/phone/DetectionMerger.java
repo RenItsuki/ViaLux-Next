@@ -56,6 +56,8 @@ final class DetectionMerger {
         // Treat crosswalk / zebra crossing as the same family
         if ((la.contains("cross") || la.contains("zebra"))
                 && (lb.contains("cross") || lb.contains("zebra"))) return true;
+        // Treat stair variants as the same family
+        if (la.contains("stair") && lb.contains("stair")) return true;
         return false;
     }
 

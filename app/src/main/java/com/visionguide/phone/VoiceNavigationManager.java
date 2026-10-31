@@ -68,7 +68,7 @@ final class VoiceNavigationManager implements SensorEventListener {
     private SpeechRecognizer speechRecognizer;
     private Intent recognizerIntent;
 
-    private boolean continuousEnabled = true;
+    private boolean continuousEnabled = false;
     private boolean isListening = false;
     private boolean isTtsSpeaking = false;
     private boolean destroyed = false;
@@ -87,9 +87,21 @@ final class VoiceNavigationManager implements SensorEventListener {
         }
     };
 
+    // Watchdog to ensure listening doesn't get stuck indefinitely if recognizer hangs
+    private final Runnable listeningTimeoutWatchdog;
+
     VoiceNavigationManager(Activity activity, CommandListener listener) {
         this.activity = activity;
         this.listener = listener;
+        this.listeningTimeoutWatchdog = () -> {
+            if (isListening) {
+                Log.w(TAG, "Listening timeout watchdog fired: stopping listening");
+                stopListening();
+                if (this.listener != null) {
+                    this.listener.onStatusUpdate("Listening timed out. Tap 'Press to Speak' when ready.");
+                }
+            }
+        };
         initRecognizer();
         initProximitySensor();
     }
@@ -116,44 +128,77 @@ final class VoiceNavigationManager implements SensorEventListener {
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 3000L);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
 
         speechRecognizer.setRecognitionListener(new RecognitionListener() {
             @Override
             public void onReadyForSpeech(Bundle params) {
+                mainHandler.removeCallbacks(listeningTimeoutWatchdog);
+                mainHandler.postDelayed(listeningTimeoutWatchdog, 10000);
                 isListening = true;
                 listener.onListeningStateChanged(true);
-                listener.onStatusUpdate("🎙️ Listening... (Say 'Start', 'Take me to...', 'Read text', or 'Help')");
+                listener.onStatusUpdate("🎙️ Listening... Speak now! (e.g. 'Is there any car?', 'Take me to...', 'Read text')");
             }
 
-            @Override public void onBeginningOfSpeech() {}
+            @Override public void onBeginningOfSpeech() {
+                mainHandler.removeCallbacks(listeningTimeoutWatchdog);
+                mainHandler.postDelayed(listeningTimeoutWatchdog, 12000);
+            }
             @Override public void onRmsChanged(float rmsdB) {}
             @Override public void onBufferReceived(byte[] buffer) {}
 
             @Override
             public void onEndOfSpeech() {
+                mainHandler.removeCallbacks(listeningTimeoutWatchdog);
                 isListening = false;
                 listener.onListeningStateChanged(false);
+                listener.onStatusUpdate("⏳ Processing what you said...");
             }
 
             @Override
             public void onError(int error) {
+                mainHandler.removeCallbacks(listeningTimeoutWatchdog);
                 isListening = false;
                 listener.onListeningStateChanged(false);
 
-                // Wait longer if recognizer is busy, otherwise restart promptly
-                long delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) ? 1200 : 450;
+                String errorMsg;
+                switch (error) {
+                    case SpeechRecognizer.ERROR_NO_MATCH:
+                        errorMsg = "Didn't catch that. Tap 'Press to Speak' and try again.";
+                        break;
+                    case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
+                        errorMsg = "No speech heard. Tap 'Press to Speak' when ready.";
+                        break;
+                    case SpeechRecognizer.ERROR_AUDIO:
+                        errorMsg = "Audio recording error. Tap to retry.";
+                        break;
+                    case SpeechRecognizer.ERROR_CLIENT:
+                    case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
+                        errorMsg = "Microphone reset. Tap 'Press to Speak' to speak.";
+                        initRecognizer();
+                        break;
+                    case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
+                        errorMsg = "Microphone permission required.";
+                        break;
+                    case SpeechRecognizer.ERROR_NETWORK:
+                    case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
+                        errorMsg = "Network error. Tap 'Press to Speak' to retry.";
+                        break;
+                    default:
+                        errorMsg = "Tap 'Press to Speak' to speak.";
+                        break;
+                }
+                listener.onStatusUpdate(errorMsg);
 
-                // In continuous mode, loop back and resume listening
+                // In continuous mode only, loop back and resume listening
                 if (continuousEnabled && !destroyed && !isTtsSpeaking) {
+                    long delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) ? 1500 : 800;
                     mainHandler.postDelayed(() -> restartListeningLoop(), delay);
                 }
             }
 
             @Override
             public void onResults(Bundle results) {
+                mainHandler.removeCallbacks(listeningTimeoutWatchdog);
                 isListening = false;
                 listener.onListeningStateChanged(false);
                 if (results != null) {
@@ -161,11 +206,16 @@ final class VoiceNavigationManager implements SensorEventListener {
                     if (matches != null && !matches.isEmpty()) {
                         String spoken = matches.get(0).toLowerCase(Locale.US).trim();
                         Log.d(TAG, "Spoken voice command heard: " + spoken);
+                        listener.onStatusUpdate("✓ Heard: \"" + spoken + "\"");
                         handleSpokenCommand(spoken);
+                    } else {
+                        listener.onStatusUpdate("Didn't catch that. Tap 'Press to Speak' to retry.");
                     }
+                } else {
+                    listener.onStatusUpdate("Didn't catch that. Tap 'Press to Speak' to retry.");
                 }
 
-                // Automatically loop back to continue listening hands-free
+                // Automatically loop back to continue listening ONLY if continuousEnabled
                 if (continuousEnabled && !destroyed && !isTtsSpeaking) {
                     mainHandler.postDelayed(() -> restartListeningLoop(), 650);
                 }
@@ -202,6 +252,44 @@ final class VoiceNavigationManager implements SensorEventListener {
         }
     }
 
+    /**
+     * Explicit Push-to-Talk / Press-to-Speak trigger.
+     * Guaranteed to stop TTS, cancel any stale state, re-init recognizer, and listen immediately.
+     */
+    void forceStartListening() {
+        if (destroyed) return;
+        isTtsSpeaking = false;
+        mainHandler.removeCallbacks(ttsWatchdog);
+        mainHandler.removeCallbacks(listeningTimeoutWatchdog);
+
+        if (speechRecognizer != null) {
+            try {
+                speechRecognizer.cancel();
+            } catch (Exception ignored) {}
+        }
+        isListening = false;
+
+        // Re-create to ensure a clean Google Speech session
+        initRecognizer();
+
+        if (speechRecognizer != null) {
+            try {
+                speechRecognizer.startListening(recognizerIntent);
+                isListening = true;
+                listener.onListeningStateChanged(true);
+                listener.onStatusUpdate("🎙️ Listening... Speak now!");
+                mainHandler.postDelayed(listeningTimeoutWatchdog, 10000);
+            } catch (Exception e) {
+                Log.e(TAG, "forceStartListening error: " + e.getMessage());
+                isListening = false;
+                listener.onListeningStateChanged(false);
+                listener.onStatusUpdate("Could not access microphone. Tap 'Press to Speak' to retry.");
+            }
+        } else {
+            listener.onStatusUpdate("⚠️ Speech recognizer unavailable. Tap to retry.");
+        }
+    }
+
     /** Trigger or resume listening. */
     void startListening() {
         if (destroyed || isTtsSpeaking) return;
@@ -212,13 +300,17 @@ final class VoiceNavigationManager implements SensorEventListener {
             try {
                 speechRecognizer.startListening(recognizerIntent);
                 isListening = true;
+                mainHandler.removeCallbacks(listeningTimeoutWatchdog);
+                mainHandler.postDelayed(listeningTimeoutWatchdog, 10000);
             } catch (Exception e) {
                 Log.e(TAG, "Error starting voice recognition: " + e.getMessage());
                 try {
                     speechRecognizer.cancel();
                 } catch (Exception ignored) {}
                 isListening = false;
-                mainHandler.postDelayed(() -> restartListeningLoop(), 1200);
+                if (continuousEnabled) {
+                    mainHandler.postDelayed(() -> restartListeningLoop(), 1200);
+                }
             }
         }
     }
@@ -229,6 +321,7 @@ final class VoiceNavigationManager implements SensorEventListener {
     }
 
     void stopListening() {
+        mainHandler.removeCallbacks(listeningTimeoutWatchdog);
         if (speechRecognizer != null && isListening) {
             try {
                 speechRecognizer.cancel();
@@ -249,6 +342,11 @@ final class VoiceNavigationManager implements SensorEventListener {
 
     boolean isListening() {
         return isListening;
+    }
+
+    void handleExternalSpokenCommand(String spoken) {
+        if (spoken == null || spoken.trim().isEmpty()) return;
+        mainHandler.post(() -> handleSpokenCommand(spoken.toLowerCase(Locale.US).trim()));
     }
 
     // ── Command Parser ─────────────────────────────────────────────────────
@@ -396,8 +494,8 @@ final class VoiceNavigationManager implements SensorEventListener {
             // Hand waved near proximity sensor (< maxRange)
             if (distance < maxRange && now - lastWaveAt > 1800) {
                 lastWaveAt = now;
-                Log.d(TAG, "Zero-touch proximity wave detected: waking listening loop.");
-                startListening();
+                Log.d(TAG, "Zero-touch proximity wave detected: waking listening.");
+                forceStartListening();
             }
         }
     }
@@ -409,6 +507,7 @@ final class VoiceNavigationManager implements SensorEventListener {
     void shutdown() {
         destroyed = true;
         mainHandler.removeCallbacks(ttsWatchdog);
+        mainHandler.removeCallbacks(listeningTimeoutWatchdog);
         if (sensorManager != null) {
             try {
                 sensorManager.unregisterListener(this);

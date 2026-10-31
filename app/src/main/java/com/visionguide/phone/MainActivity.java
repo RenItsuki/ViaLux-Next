@@ -55,9 +55,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class MainActivity extends AppCompatActivity implements VoiceNavigationManager.CommandListener {
 
     // ── Permission request codes ───────────────────────────────────────────
-    private static final int REQ_CAMERA   = 42;
-    private static final int REQ_LOCATION = 43;
-    private static final int REQ_AUDIO    = 44;
+    private static final int REQ_CAMERA      = 42;
+    private static final int REQ_LOCATION    = 43;
+    private static final int REQ_AUDIO       = 44;
+    private static final int REQ_VOICE_INPUT = 45;
 
     // ── Timing ────────────────────────────────────────────────────────────
     private static final long ANALYSIS_INTERVAL_MS = 750;
@@ -69,6 +70,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private TextView guidanceText;
     private TextView statusPill;
     private TextView voiceStatusText;
+    private Button pressToSpeakButton;
     private Button startStopButton;
     private Button ocrButton;
     private Button navButton;
@@ -177,7 +179,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
                     Manifest.permission.ACCESS_FINE_LOCATION
             }, REQ_AUDIO);
         } else {
-            voiceNav.setContinuousEnabled(true);
+            voiceNav.setContinuousEnabled(settings.continuousVoiceEnabled);
         }
     }
 
@@ -186,7 +188,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         super.onResume();
         if (settings.nfcEnabled) nfcReader.enable(this);
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            voiceNav.setContinuousEnabled(true);
+            voiceNav.setContinuousEnabled(settings.continuousVoiceEnabled);
         }
     }
 
@@ -221,13 +223,27 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     public void onRequestPermissionsResult(int code, String[] perms, int[] grants) {
         super.onRequestPermissionsResult(code, perms, grants);
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            voiceNav.setContinuousEnabled(true);
-            voiceNav.startListening();
+            voiceNav.setContinuousEnabled(settings.continuousVoiceEnabled);
+            if (settings.continuousVoiceEnabled) {
+                voiceNav.startListening();
+            }
         }
         if (code == REQ_CAMERA && grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) {
             startDetection();
         } else if (code == REQ_LOCATION && grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) {
             showDestinationDialog();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_VOICE_INPUT && resultCode == RESULT_OK && data != null) {
+            java.util.ArrayList<String> matches = data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);
+            if (matches != null && !matches.isEmpty()) {
+                String spoken = matches.get(0);
+                voiceNav.handleExternalSpokenCommand(spoken);
+            }
         }
     }
 
@@ -239,7 +255,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         if (hasSpokenWelcome) return;
         hasSpokenWelcome = true;
         mainHandler.postDelayed(() -> {
-            String welcome = "Welcome to Via Lux. Say 'Start camera' to detect obstacles, 'Take me to' with any place name to navigate, or ask: 'Is there any car in front of me?'. Say 'Start' anytime to begin.";
+            String welcome = "Welcome to Via Lux. Tap 'Press to Speak' anytime to ask questions like: 'Is there any car in front of me?', or say 'Take me to' with any place name. You can also tap 'Start Camera' to begin.";
             speechGuide.forceSpeak(welcome, true);
         }, 600);
     }
@@ -305,11 +321,25 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
         // Simple Voice Feedback & Assistant Prompt
         voiceStatusText = new TextView(this);
-        voiceStatusText.setText("🎙️ Ask: 'Is there any car in front of me?' or 'What is in front of me?'");
+        voiceStatusText.setText("🎙️ Tap 'Press to Speak' or ask: 'Is there any car in front of me?'");
         voiceStatusText.setTextColor(0xFF00E699);
         voiceStatusText.setTextSize(13f);
         voiceStatusText.setGravity(Gravity.CENTER);
-        voiceStatusText.setPadding(0, dp(6), 0, dp(6));
+        voiceStatusText.setPadding(0, dp(6), 0, dp(4));
+
+        // Dedicated Hero "Press to Speak" Button (Large, high-contrast, easy to tap)
+        pressToSpeakButton = new Button(this);
+        pressToSpeakButton.setText("🎤 Press to Speak");
+        pressToSpeakButton.setTextColor(0xFF00FFB0);
+        pressToSpeakButton.setTextSize(17f);
+        pressToSpeakButton.setAllCaps(false);
+        pressToSpeakButton.setTypeface(Typeface.DEFAULT_BOLD);
+        pressToSpeakButton.setBackground(card(0xFF103628, dp(18), 0xFF00E699));
+        pressToSpeakButton.setOnClickListener(v -> onPressToSpeakClicked());
+
+        LinearLayout.LayoutParams speakParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(54));
+        speakParams.setMargins(0, dp(4), 0, dp(6));
 
         // Open in Google Maps button (appears only during walking route)
         openMapsButton = button("🗺️ Open in Google Maps", 0xFF142B44, 0xFF4285F4);
@@ -366,6 +396,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             settings.load();
             guidanceEngine.reset();
             ocrProcessor.setIntervalMs(settings.ocrIntervalMs);
+            voiceNav.setContinuousEnabled(settings.continuousVoiceEnabled);
             Toast.makeText(this, "Settings saved.", Toast.LENGTH_SHORT).show();
         }));
 
@@ -387,6 +418,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         panel.addView(header, fullWidth);
         panel.addView(guidanceText, fullWidth);
         panel.addView(voiceStatusText, fullWidth);
+        panel.addView(pressToSpeakButton, speakParams);
         panel.addView(openMapsButton, fullWidth);
         panel.addView(row1, fullWidth);
         panel.addView(row2, fullWidth);
@@ -415,6 +447,38 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         }
     }
 
+    private void onPressToSpeakClicked() {
+        vibrate();
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_AUDIO);
+            return;
+        }
+
+        if (voiceNav.isListening()) {
+            voiceNav.stopListening();
+            setPressToSpeakButtonListening(false);
+            voiceStatusText.setText("Listening stopped. Tap 'Press to Speak' when ready.");
+        } else {
+            speechGuide.stopSpeaking();
+            setPressToSpeakButtonListening(true);
+            voiceNav.forceStartListening();
+            voiceStatusText.setText("🎙️ Listening... Speak now! (e.g. 'Is there any car in front of me?')");
+        }
+    }
+
+    private void setPressToSpeakButtonListening(boolean listening) {
+        if (pressToSpeakButton == null) return;
+        if (listening) {
+            pressToSpeakButton.setText("🔴 Listening... (Speak Now)");
+            pressToSpeakButton.setTextColor(Color.WHITE);
+            pressToSpeakButton.setBackground(card(0xFF5A1420, dp(18), 0xFFFF3B5C));
+        } else {
+            pressToSpeakButton.setText("🎤 Press to Speak");
+            pressToSpeakButton.setTextColor(0xFF00FFB0);
+            pressToSpeakButton.setBackground(card(0xFF103628, dp(18), 0xFF00E699));
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     // Conversational Scene Voice Assistant & Commands
     // ─────────────────────────────────────────────────────────────────────
@@ -426,7 +490,8 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             return;
         }
         speechGuide.stopSpeaking();
-        voiceNav.startListening();
+        setPressToSpeakButtonListening(true);
+        voiceNav.forceStartListening();
     }
 
     @Override
@@ -581,6 +646,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     @Override
     public void onListeningStateChanged(boolean isListening) {
         runOnUiThread(() -> {
+            setPressToSpeakButtonListening(isListening);
             if (isListening) {
                 statusPill.setText("🎙️ Listening...");
                 statusPill.setTextColor(0xFFFF5555);
@@ -593,7 +659,12 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
     @Override
     public void onPartialSpeechHeard(String partial) {
-        runOnUiThread(() -> voiceStatusText.setText("🎙️ Hearing: \"" + partial + "\""));
+        runOnUiThread(() -> {
+            voiceStatusText.setText("🎙️ Hearing: \"" + partial + "\"");
+            if (pressToSpeakButton != null) {
+                pressToSpeakButton.setText("🎙️ \"" + partial + "\"");
+            }
+        });
     }
 
     // ─────────────────────────────────────────────────────────────────────

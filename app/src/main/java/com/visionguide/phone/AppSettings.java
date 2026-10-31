@@ -32,6 +32,9 @@ final class AppSettings {
     boolean ocrEnabled;
     int ocrIntervalMs;           // minimum ms between OCR runs
 
+    // ── Voice Navigation ───────────────────────────────────────────────────
+    boolean continuousVoiceEnabled; // false = push-to-talk button (reliable), true = continuous loop
+
     AppSettings(Context context) {
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         load();
@@ -59,6 +62,7 @@ final class AppSettings {
 
         ocrEnabled         = prefs.getBoolean("ocrEnabled",   true);
         ocrIntervalMs      = prefs.getInt("ocrIntervalMs",    2500);
+        continuousVoiceEnabled = prefs.getBoolean("continuousVoiceEnabled", false);
     }
 
     void save() {
@@ -77,6 +81,7 @@ final class AppSettings {
                 .putBoolean("nfcEnabled",      nfcEnabled)
                 .putBoolean("ocrEnabled",      ocrEnabled)
                 .putInt("ocrIntervalMs",       ocrIntervalMs)
+                .putBoolean("continuousVoiceEnabled", continuousVoiceEnabled)
                 .apply();
     }
 
@@ -93,6 +98,7 @@ final class AppSettings {
         nfcEnabled        = true;
         ocrEnabled        = true;
         ocrIntervalMs     = 2500;
+        continuousVoiceEnabled = false;
         // Note: API keys are NOT reset to avoid losing credentials
         save();
     }

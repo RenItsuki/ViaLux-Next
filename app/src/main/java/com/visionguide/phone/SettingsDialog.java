@@ -63,6 +63,11 @@ final class SettingsDialog {
         override.setTextColor(Color.WHITE);
         override.setChecked(settings.priorityOverride);
 
+        CheckBox continuousVoiceCheck = new CheckBox(context);
+        continuousVoiceCheck.setText("Continuous voice listening (hands-free loop)");
+        continuousVoiceCheck.setTextColor(Color.WHITE);
+        continuousVoiceCheck.setChecked(settings.continuousVoiceEnabled);
+
         panel.addView(speechLabel);
         panel.addView(speechDelay);
         panel.addView(help(context, "Minimum time between different normal voice messages."));
@@ -78,6 +83,8 @@ final class SettingsDialog {
         panel.addView(edgeSeek);
         panel.addView(help(context, "Objects on the extreme side are less likely to collide with you."));
         panel.addView(override);
+        panel.addView(continuousVoiceCheck);
+        panel.addView(help(context, "When turned off (recommended), tap 'Press to Speak' on the main screen for 100% reliable voice recognition without timeouts."));
 
         // ── Online mode ─────────────────────────────────────────────────────
         panel.addView(section(context, "Online Mode (Roboflow)"));
@@ -153,6 +160,8 @@ final class SettingsDialog {
                     settings.nfcEnabled = nfcCheck.isChecked();
                     // OCR
                     settings.ocrEnabled = ocrCheck.isChecked();
+                    // Continuous Voice
+                    settings.continuousVoiceEnabled = continuousVoiceCheck.isChecked();
                     settings.save();
                     changed.onChanged();
                 })

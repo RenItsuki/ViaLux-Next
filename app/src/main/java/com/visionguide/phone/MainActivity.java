@@ -40,9 +40,18 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * MainActivity — Via Lux Assistive Vision Application.
+ *
+ * Streamlined Architecture:
+ *   1. Dual-Camera Metric Depth: Estimates real distance using Camera2 stereo optics and pinhole geometry.
+ *   2. On-Device YOLO26n Object Detection: Fast, reliable, low-power detection.
+ *   3. Conversational Scene Assistant: Understands natural language questions like
+ *      "Is there any car in front of me?", "What is in front of me?", "Is the path clear?".
+ *   4. Clean, Simple, Non-Intrusive UI: Accessible high-contrast cards without technical clutter.
+ */
 public final class MainActivity extends AppCompatActivity implements VoiceNavigationManager.CommandListener {
 
     // ── Permission request codes ───────────────────────────────────────────
@@ -60,15 +69,12 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private TextView guidanceText;
     private TextView statusPill;
     private TextView voiceStatusText;
-    private TextView settingsSummary;
-    private Button voiceMicButton;
     private Button startStopButton;
     private Button ocrButton;
     private Button navButton;
     private Button openMapsButton;
-    private Button repeatButton;
-    private Button settingsButton;
     private Button nfcButton;
+    private Button settingsButton;
     private TextView loadingText;
 
     // ── Engine Components ─────────────────────────────────────────────────
@@ -76,7 +82,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private GuidanceEngine guidanceEngine;
     private AppSettings settings;
     private YoloOnnxDetector detector;
-    private StairVisionDetector stairDetector;
+    private DualCameraDepthEstimator depthEstimator;
     private OcrProcessor ocrProcessor;
     private RoboflowClient roboflowClient;
     private NavigationGuide navigationGuide;
@@ -87,7 +93,6 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
     private ProcessCameraProvider cameraProvider;
     private ExecutorService cameraExecutor;
-    private ExecutorService stairExecutor;
     private ExecutorService onlineExecutor;
     private ConnectivityManager connectivityManager;
 
@@ -98,6 +103,11 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private long lastOnlineTime   = 0;
     private boolean running = false;
     private boolean hasSpokenWelcome = false;
+
+    // Real-time scene memory for natural language assistant queries
+    private volatile List<Detection> currentDetections = Collections.emptyList();
+    private volatile int currentImageWidth = 640;
+    private volatile int currentImageHeight = 480;
 
     // Text presence asking state
     private String pendingDetectedText = null;
@@ -126,11 +136,11 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         cameraExecutor  = Executors.newSingleThreadExecutor();
-        stairExecutor   = Executors.newSingleThreadExecutor();
         onlineExecutor  = Executors.newSingleThreadExecutor();
         speechGuide     = new SpeechGuide(this);
         guidanceEngine  = new GuidanceEngine();
         settings        = new AppSettings(this);
+        depthEstimator  = new DualCameraDepthEstimator(this);
         ocrProcessor    = new OcrProcessor();
         roboflowClient  = new RoboflowClient();
         navigationGuide = new NavigationGuide(this);
@@ -155,10 +165,10 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         speechGuide.setOnInitListener(this::speakWelcomeOptions);
 
         buildUi();
-        loadDetectors();
+        loadDetector();
         handleNfcIntent(getIntent());
 
-        // Check audio & camera permissions for hands-free zero-contact experience
+        // Check audio & camera permissions
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
                 || checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{
@@ -203,10 +213,8 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         if (navigationGuide != null) navigationGuide.stop();
         if (voiceNav        != null) voiceNav.shutdown();
         if (cameraExecutor  != null) cameraExecutor.shutdownNow();
-        if (stairExecutor   != null) stairExecutor.shutdownNow();
         if (onlineExecutor  != null) onlineExecutor.shutdownNow();
         if (detector        != null) { try { detector.close(); } catch (Exception ignored) {} }
-        if (stairDetector   != null) { try { stairDetector.close(); } catch (Exception ignored) {} }
     }
 
     @Override
@@ -231,18 +239,18 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         if (hasSpokenWelcome) return;
         hasSpokenWelcome = true;
         mainHandler.postDelayed(() -> {
-            String welcome = "Welcome to Via Lux. You can say: 'Start camera' for obstacle detection, 'Take me to' followed by a destination to navigate, 'Read text' to read signs, or 'Check NFC' for medicine. Say 'Start' anytime to begin.";
+            String welcome = "Welcome to Via Lux. Say 'Start camera' to detect obstacles, 'Take me to' with any place name to navigate, or ask: 'Is there any car in front of me?'. Say 'Start' anytime to begin.";
             speechGuide.forceSpeak(welcome, true);
         }, 600);
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Modern High-Contrast Accessible UI Construction
+    // Clean, Simple, Accessible UI Construction
     // ─────────────────────────────────────────────────────────────────────
 
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Color.rgb(8, 12, 18));
+        root.setBackgroundColor(Color.rgb(10, 14, 20));
 
         // Camera preview & overlay
         previewView = new PreviewView(this);
@@ -250,14 +258,14 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         previewView.setAlpha(0f);
         overlayView = new OverlayView(this);
 
-        // Main chrome container (bottom sheet)
-        LinearLayout chrome = new LinearLayout(this);
-        chrome.setOrientation(LinearLayout.VERTICAL);
-        chrome.setPadding(dp(16), dp(14), dp(16), dp(18));
-        chrome.setGravity(Gravity.CENTER_HORIZONTAL);
-        chrome.setBackground(card(0xF20B1320, dp(26), 0x3337D4A7));
+        // Simple, clean control panel
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(16), dp(12), dp(16), dp(16));
+        panel.setGravity(Gravity.CENTER_HORIZONTAL);
+        panel.setBackground(card(0xF40E1624, dp(22), 0x22FFFFFF));
 
-        // Header: App title + Status Badge
+        // Header: Title + Status Pill
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -266,7 +274,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         TextView title = new TextView(this);
         title.setText("Via Lux");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(26f);
+        title.setTextSize(24f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
 
         statusPill = new TextView(this);
@@ -275,7 +283,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         statusPill.setTextSize(13f);
         statusPill.setTypeface(Typeface.DEFAULT_BOLD);
         statusPill.setPadding(dp(12), dp(4), dp(12), dp(4));
-        statusPill.setBackground(card(0x2E00E699, dp(14), 0x8800E699));
+        statusPill.setBackground(card(0x2800E699, dp(14), 0x6600E699));
 
         LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -284,64 +292,53 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         header.addView(title);
         header.addView(statusPill, pillParams);
 
-        // Prominent Spoken Guidance Card (Giant touch target)
+        // Primary Spoken Guidance Card (Large & High Contrast)
         guidanceText = new TextView(this);
-        guidanceText.setText("Tap Start or say 'Start camera' to begin.\nSay 'Take me to [place]' to navigate.");
+        guidanceText.setText("Tap Start to begin.\nAsk anytime: 'Is there any car in front of me?'");
         guidanceText.setTextColor(Color.WHITE);
-        guidanceText.setTextSize(20f);
+        guidanceText.setTextSize(19f);
         guidanceText.setTypeface(Typeface.DEFAULT_BOLD);
         guidanceText.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        guidanceText.setPadding(dp(18), dp(16), dp(18), dp(16));
-        guidanceText.setBackground(card(0xCC111C28, dp(18), 0x8837D4A7));
+        guidanceText.setPadding(dp(16), dp(14), dp(16), dp(14));
+        guidanceText.setBackground(card(0xDD121D2C, dp(16), 0x6600E699));
         guidanceText.setOnClickListener(v -> onGuidanceCardTapped());
 
-        // Voice Feedback Status Line
+        // Simple Voice Feedback & Assistant Prompt
         voiceStatusText = new TextView(this);
-        voiceStatusText.setText("🎙️ Listening... (Say 'Start', 'Take me to...', 'Read text', or 'Help')");
+        voiceStatusText.setText("🎙️ Ask: 'Is there any car in front of me?' or 'What is in front of me?'");
         voiceStatusText.setTextColor(0xFF00E699);
         voiceStatusText.setTextSize(13f);
         voiceStatusText.setGravity(Gravity.CENTER);
         voiceStatusText.setPadding(0, dp(6), 0, dp(6));
 
-        // Voice Mic Primary Action Button
-        voiceMicButton = new Button(this);
-        voiceMicButton.setText("🎙️  Tap Anywhere to Speak Command");
-        voiceMicButton.setTextColor(Color.BLACK);
-        voiceMicButton.setTextSize(15f);
-        voiceMicButton.setTypeface(Typeface.DEFAULT_BOLD);
-        voiceMicButton.setAllCaps(false);
-        voiceMicButton.setBackground(card(0xFF00E699, dp(20), Color.WHITE));
-        voiceMicButton.setOnClickListener(v -> triggerVoiceListening());
-
-        // Open in Google Maps action button (appears during navigation)
-        openMapsButton = button("🗺️ Open in Google Maps (Walking)", 0xFF142B44, 0xFF4285F4);
+        // Open in Google Maps button (appears only during walking route)
+        openMapsButton = button("🗺️ Open in Google Maps", 0xFF142B44, 0xFF4285F4);
         openMapsButton.setVisibility(View.GONE);
         openMapsButton.setOnClickListener(v -> onOpenMapsCommand());
 
-        // Row 1: Start/Stop Camera + Read Text
+        // 4 Main Accessible Buttons (2x2 Simple Grid)
         LinearLayout row1 = new LinearLayout(this);
         row1.setOrientation(LinearLayout.HORIZONTAL);
         row1.setGravity(Gravity.CENTER);
 
-        startStopButton = button("▶ Start Camera", 0xFF183828, 0xFF00E699);
+        startStopButton = button("▶ Start Camera", 0xFF143422, 0xFF00E699);
         startStopButton.setOnClickListener(v -> toggleCameraDetection());
 
-        ocrButton = button("📖 Read Text", 0xFF103046, 0xFF00D2FF);
+        ocrButton = button("📖 Read Text", 0xFF10283C, 0xFF00D2FF);
         ocrButton.setOnClickListener(v -> triggerOcrRead());
 
         row1.addView(startStopButton, buttonParams());
         row1.addView(ocrButton, buttonParams());
 
-        // Row 2: Navigate / Take Me To + Check NFC
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
         row2.setGravity(Gravity.CENTER);
 
-        navButton = button("🧭 Take Me To", 0xFF1A2648, 0xFF5B8DEF);
+        navButton = button("🧭 Navigate", 0xFF182240, 0xFF5B8DEF);
         navButton.setOnClickListener(v -> {
             if (navigationGuide.isActive()) {
                 navigationGuide.stop();
-                navButton.setText("🧭 Take Me To");
+                navButton.setText("🧭 Navigate");
                 openMapsButton.setVisibility(View.GONE);
                 statusPill.setText("● Active");
                 speechGuide.forceSpeak("Navigation stopped.", true);
@@ -350,45 +347,35 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             }
         });
 
-        nfcButton = button("🏷️ Check NFC", 0xFF2A1C3C, 0xFFC084FC);
+        nfcButton = button("🏷️ Medicine (NFC)", 0xFF241834, 0xFFC084FC);
         nfcButton.setOnClickListener(v -> onCheckNfcCommand());
 
         row2.addView(navButton, buttonParams());
         row2.addView(nfcButton, buttonParams());
 
-        // Row 3: Repeat + Settings
+        // Settings / Options footer
         LinearLayout row3 = new LinearLayout(this);
         row3.setOrientation(LinearLayout.HORIZONTAL);
         row3.setGravity(Gravity.CENTER);
 
-        repeatButton = button("🔁 Repeat", 0xFF362812, 0xFFFFB300);
-        repeatButton.setOnClickListener(v -> onRepeatCommand());
+        Button helpBtn = button("💡 Voice Help", 0xFF1C222C, 0xFF8A9BA8);
+        helpBtn.setOnClickListener(v -> onHelpCommand());
 
-        settingsButton = button("⚙️ Settings", 0xFF1C222C, 0xFF9FB0C3);
+        settingsButton = button("⚙️ Settings", 0xFF1C222C, 0xFF8A9BA8);
         settingsButton.setOnClickListener(v -> SettingsDialog.show(this, settings, () -> {
             settings.load();
             guidanceEngine.reset();
             ocrProcessor.setIntervalMs(settings.ocrIntervalMs);
-            settingsSummary.setText(settingsSummaryText());
             Toast.makeText(this, "Settings saved.", Toast.LENGTH_SHORT).show();
         }));
 
-        row3.addView(repeatButton, buttonParams());
+        row3.addView(helpBtn, buttonParams());
         row3.addView(settingsButton, buttonParams());
-
-        // Status Summary Footer
-        settingsSummary = new TextView(this);
-        settingsSummary.setText(settingsSummaryText());
-        settingsSummary.setTextColor(0xFF8A9BA8);
-        settingsSummary.setTextSize(12f);
-        settingsSummary.setGravity(Gravity.CENTER);
-        settingsSummary.setPadding(0, dp(6), 0, 0);
 
         loadingText = new TextView(this);
         loadingText.setText("Opening camera feed...");
         loadingText.setTextColor(0xFF00E699);
-        loadingText.setTextSize(16f);
-        loadingText.setTypeface(Typeface.DEFAULT_BOLD);
+        loadingText.setTextSize(15f);
         loadingText.setGravity(Gravity.CENTER);
         loadingText.setVisibility(View.GONE);
 
@@ -397,16 +384,14 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         fullWidth.setMargins(0, dp(3), 0, dp(3));
 
-        chrome.addView(header, fullWidth);
-        chrome.addView(guidanceText, fullWidth);
-        chrome.addView(voiceStatusText, fullWidth);
-        chrome.addView(voiceMicButton, fullWidth);
-        chrome.addView(openMapsButton, fullWidth);
-        chrome.addView(row1, fullWidth);
-        chrome.addView(row2, fullWidth);
-        chrome.addView(row3, fullWidth);
-        chrome.addView(settingsSummary, fullWidth);
-        chrome.addView(loadingText, fullWidth);
+        panel.addView(header, fullWidth);
+        panel.addView(guidanceText, fullWidth);
+        panel.addView(voiceStatusText, fullWidth);
+        panel.addView(openMapsButton, fullWidth);
+        panel.addView(row1, fullWidth);
+        panel.addView(row2, fullWidth);
+        panel.addView(row3, fullWidth);
+        panel.addView(loadingText, fullWidth);
 
         root.addView(previewView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -416,7 +401,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         FrameLayout.LayoutParams guideParams = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        root.addView(chrome, guideParams);
+        root.addView(panel, guideParams);
 
         setContentView(root);
     }
@@ -431,7 +416,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Voice Navigation & Command Actions
+    // Conversational Scene Voice Assistant & Commands
     // ─────────────────────────────────────────────────────────────────────
 
     private void triggerVoiceListening() {
@@ -442,6 +427,26 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         }
         speechGuide.stopSpeaking();
         voiceNav.startListening();
+    }
+
+    @Override
+    public void onSceneAssistantQuery(String question) {
+        runOnUiThread(() -> {
+            vibrate();
+            // Query the current visual scene memory
+            String answer = SceneVoiceAssistant.answerQuery(
+                    question,
+                    currentDetections,
+                    depthEstimator,
+                    guidanceEngine,
+                    currentImageWidth,
+                    currentImageHeight,
+                    ocrProcessor.repeat()
+            );
+            guidanceText.setText(answer);
+            speechGuide.forceSpeak(answer, true);
+            voiceStatusText.setText("💬 " + question);
+        });
     }
 
     @Override
@@ -514,7 +519,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         runOnUiThread(() -> {
             vibrate();
             String dest = navigationGuide.getDestinationName();
-            if (dest.isEmpty()) dest = "Shaheed Sukhdev College";
+            if (dest.isEmpty()) dest = "Destination";
             NavigationGuide.openInGoogleMaps(this, dest, navigationGuide.getDestLat(), navigationGuide.getDestLng());
         });
     }
@@ -525,7 +530,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             vibrate();
             if (navigationGuide.isActive()) {
                 navigationGuide.stop();
-                navButton.setText("🧭 Take Me To");
+                navButton.setText("🧭 Navigate");
                 openMapsButton.setVisibility(View.GONE);
                 statusPill.setText("● Active");
                 speechGuide.forceSpeak("Navigation stopped.", true);
@@ -542,10 +547,10 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
                 voiceStatusText.setText("⚠️ NFC is disabled or not supported.");
                 return;
             }
-            String prompt = "NFC is active. Hold any medicine package, NFC card, or sticker against the upper back of your phone.";
+            String prompt = "NFC active. Hold any medicine box or tag against the upper back of your phone.";
             speechGuide.forceSpeak(prompt, true);
             guidanceText.setText(prompt);
-            voiceStatusText.setText("🏷️ Waiting for NFC tag tap on back of phone...");
+            voiceStatusText.setText("🏷️ Waiting for NFC tag tap on phone back...");
         });
     }
 
@@ -554,7 +559,6 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         runOnUiThread(() -> SettingsDialog.show(this, settings, () -> {
             settings.load();
             guidanceEngine.reset();
-            settingsSummary.setText(settingsSummaryText());
         }));
     }
 
@@ -562,10 +566,10 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     public void onHelpCommand() {
         runOnUiThread(() -> {
             vibrate();
-            String options = "Via Lux voice commands: Say 'Start camera' to begin obstacle detection, 'Take me to' with any place name like Shaheed Sukhdev College for walking directions, 'Open Google Maps' to view map, 'Read text' to read signs and packaging, 'Check NFC' to scan medicine tags, or 'Stop' to pause.";
-            voiceStatusText.setText("💡 " + options);
-            guidanceText.setText(options);
-            speechGuide.forceSpeak(options, true);
+            String help = "You can ask: 'Is there any car in front of me?', 'What is in front of me?', 'Is the path clear?', 'Take me to' with any place name, 'Read text', or 'Check NFC'.";
+            voiceStatusText.setText("💡 " + help);
+            guidanceText.setText(help);
+            speechGuide.forceSpeak(help, true);
         });
     }
 
@@ -578,11 +582,11 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     public void onListeningStateChanged(boolean isListening) {
         runOnUiThread(() -> {
             if (isListening) {
-                voiceMicButton.setText("🔴 Listening... Speak Command Now");
-                voiceMicButton.setBackground(card(0xFFFF4B4B, dp(20), Color.WHITE));
+                statusPill.setText("🎙️ Listening...");
+                statusPill.setTextColor(0xFFFF5555);
             } else {
-                voiceMicButton.setText("🎙️  Tap Anywhere to Speak Command");
-                voiceMicButton.setBackground(card(0xFF00E699, dp(20), Color.WHITE));
+                statusPill.setText(running ? "● Active" : "● Ready");
+                statusPill.setTextColor(0xFF00E699);
             }
         });
     }
@@ -609,28 +613,23 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // AI Detectors Loading (YOLO26n + StairVision Concurrent)
+    // AI Detector Loading (YOLO26n ONNX)
     // ─────────────────────────────────────────────────────────────────────
 
-    private void loadDetectors() {
+    private void loadDetector() {
         cameraExecutor.execute(() -> {
             try {
                 detector = new YoloOnnxDetector(this);
-                runOnUiThread(() -> statusPill.setText("● YOLO Ready"));
+                runOnUiThread(() -> {
+                    String hw = depthEstimator.getCameraHardwareStatus();
+                    statusPill.setText("● Ready");
+                    voiceStatusText.setText("Ready · " + hw);
+                });
             } catch (Exception e) {
                 runOnUiThread(() -> {
-                    statusPill.setText("● YOLO Error");
+                    statusPill.setText("● Error");
                     guidanceText.setText(e.getMessage());
                 });
-            }
-        });
-
-        stairExecutor.execute(() -> {
-            try {
-                stairDetector = new StairVisionDetector(this);
-                runOnUiThread(() -> statusPill.setText("● Dual AI Ready"));
-            } catch (Exception e) {
-                runOnUiThread(() -> statusPill.setText("● StairVision Err"));
             }
         });
     }
@@ -653,7 +652,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         running = true;
         guidanceEngine.reset();
         startStopButton.setText("⏹ Stop Camera");
-        startStopButton.setBackground(card(0xFF381818, dp(18), 0xFFFF5555));
+        startStopButton.setBackground(card(0xFF341414, dp(18), 0xFFFF5555));
         statusPill.setText("● Opening...");
         guidanceText.setText("Hold phone upright and point forward.");
         loadingText.setVisibility(View.VISIBLE);
@@ -684,7 +683,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             } catch (Exception e) {
                 running = false;
                 startStopButton.setText("▶ Start Camera");
-                startStopButton.setBackground(card(0xFF183828, dp(18), 0xFF00E699));
+                startStopButton.setBackground(card(0xFF143422, dp(18), 0xFF00E699));
                 statusPill.setText("● Error");
                 guidanceText.setText("Camera error: " + e.getMessage());
             }
@@ -697,16 +696,16 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         loadingText.animate().cancel();
         loadingText.setVisibility(View.GONE);
         startStopButton.setText("▶ Start Camera");
-        startStopButton.setBackground(card(0xFF183828, dp(18), 0xFF00E699));
+        startStopButton.setBackground(card(0xFF143422, dp(18), 0xFF00E699));
         statusPill.setText("● Stopped");
         guidanceText.setText("Detection stopped. Tap Start or say 'Start camera'.");
         previewView.animate().alpha(0.25f).setDuration(250).start();
-        overlayView.update(Collections.emptyList(), guidanceEngine, 1, 1);
+        overlayView.update(Collections.emptyList(), guidanceEngine, depthEstimator, 1, 1);
         if (cameraProvider != null) cameraProvider.unbindAll();
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Dual Parallel Frame Analysis, Scene Text Detection, & Merging
+    // Single Fast Model Inference (YOLO26n + Dual-Camera Depth)
     // ─────────────────────────────────────────────────────────────────────
 
     private void analyzeImage(ImageProxy image) {
@@ -725,37 +724,10 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             int width  = bitmap.getWidth();
             int height = bitmap.getHeight();
 
-            // ── Parallel on-device dual inference ─────────────────────────
-            // 1. StairVision on dedicated stairExecutor
-            final StairVisionDetector localStairDetector = stairDetector;
-            Future<List<Detection>> stairFuture = null;
-            if (localStairDetector != null) {
-                stairFuture = stairExecutor.submit(() -> {
-                    try {
-                        return localStairDetector.detect(bitmap);
-                    } catch (Exception e) {
-                        return Collections.emptyList();
-                    }
-                });
-            }
+            // Run YOLO26n on cameraExecutor directly
+            List<Detection> yoloDetections = localDetector.detect(bitmap);
 
-            // 2. YOLO26n on cameraExecutor concurrently
-            List<Detection> yoloDetections = Collections.emptyList();
-            try {
-                yoloDetections = localDetector.detect(bitmap);
-            } catch (Exception ignored) {}
-
-            List<Detection> stairDetections = Collections.emptyList();
-            if (stairFuture != null) {
-                try {
-                    stairDetections = stairFuture.get();
-                } catch (Exception ignored) {}
-            }
-
-            // Merge both on-device models
-            List<Detection> local = DetectionMerger.merge(yoloDetections, stairDetections);
-
-            // ── Online inference (throttled background) ───────────────────
+            // Online inference (if enabled in settings)
             if (settings.onlineModeEnabled
                     && !settings.roboflowApiKey.isEmpty()
                     && now - lastOnlineTime >= ONLINE_INTERVAL_MS
@@ -773,7 +745,12 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
                 });
             }
 
-            List<Detection> merged = DetectionMerger.merge(local, latestOnlineDetections);
+            List<Detection> merged = DetectionMerger.merge(yoloDetections, latestOnlineDetections);
+
+            // Store current visual scene state for Natural Language Voice Assistant Q&A
+            currentDetections = merged;
+            currentImageWidth = width;
+            currentImageHeight = height;
 
             // ── Passive Scene Text Detection ("Ask when it detects text") ──
             if (settings.ocrEnabled) {
@@ -805,8 +782,8 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
                 }));
             }
 
-            // ── Guidance Evaluation ───────────────────────────────────────
-            Guidance guidance = guidanceEngine.evaluate(merged, width, height, now, settings);
+            // ── Guidance Evaluation (Incorporating Dual Camera Depth) ───────
+            Guidance guidance = guidanceEngine.evaluate(merged, width, height, now, settings, depthEstimator);
             bitmap.recycle();
 
             runOnUiThread(() -> updateUi(merged, guidance, width, height));
@@ -822,8 +799,9 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         if (!running) return;
         overlayView.update(
                 detections == null ? Collections.emptyList() : detections,
-                guidanceEngine, width, height);
-        // Only override guidance text if not awaiting text confirmation
+                guidanceEngine, depthEstimator, width, height);
+
+        // Only override guidance text if not in active text confirmation
         if (guidance != null && !textConfirmationActive) {
             guidanceText.setText(guidance.message);
             speechGuide.speak(guidance.message, guidance.emergency, guidance.priority);
@@ -836,14 +814,14 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
     private void showDestinationDialog() {
         EditText input = new EditText(this);
-        input.setHint("Enter destination (e.g. Shaheed Sukhdev College, Station)");
+        input.setHint("Enter destination (e.g. Shaheed Sukhdev College, Pharmacy)");
         input.setTextColor(Color.WHITE);
         input.setHintTextColor(0xFF607080);
         input.setPadding(dp(16), dp(12), dp(16), dp(12));
 
         new AlertDialog.Builder(this)
                 .setTitle("Walking Navigation")
-                .setMessage("Enter destination, or tap 'Speak Destination'.")
+                .setMessage("Enter destination, or say 'Take me to [place]'.")
                 .setView(input)
                 .setPositiveButton("Navigate", (d, w) -> {
                     String dest = input.getText().toString().trim();
@@ -874,7 +852,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             guidanceText.setText(instruction);
             speechGuide.speak(instruction, false, Guidance.PRIORITY_INFO);
             if (isError) {
-                navButton.setText("🧭 Take Me To");
+                navButton.setText("🧭 Navigate");
                 openMapsButton.setVisibility(View.GONE);
                 statusPill.setText("● Active");
             } else {
@@ -911,26 +889,19 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         }
     }
 
-    private String settingsSummaryText() {
-        return "Speech " + (settings.speechDelayMs / 1000f) + "s"
-                + " · Repeat " + (settings.repeatCooldownMs / 1000) + "s"
-                + " · " + settings.motionLabel()
-                + " · " + settings.notifyDistanceLabel();
-    }
-
     private Button button(String text, int bgColor, int strokeColor) {
         Button b = new Button(this);
         b.setText(text);
         b.setTextColor(Color.WHITE);
-        b.setTextSize(15f);
+        b.setTextSize(14f);
         b.setAllCaps(false);
         b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setBackground(card(bgColor, dp(18), strokeColor));
+        b.setBackground(card(bgColor, dp(16), strokeColor));
         return b;
     }
 
     private LinearLayout.LayoutParams buttonParams() {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(52), 1f);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(48), 1f);
         p.setMargins(dp(3), 0, dp(3), 0);
         return p;
     }

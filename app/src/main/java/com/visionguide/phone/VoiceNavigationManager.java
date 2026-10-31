@@ -58,6 +58,7 @@ final class VoiceNavigationManager implements SensorEventListener {
         void onStatusUpdate(String status);
         void onListeningStateChanged(boolean isListening);
         void onPartialSpeechHeard(String partial);
+        void onSceneAssistantQuery(String query);
     }
 
     private final Activity activity;
@@ -260,6 +261,13 @@ final class VoiceNavigationManager implements SensorEventListener {
                 .replaceFirst("^please\\s*", "")
                 .replaceFirst("^can\\s+you\\s*", "")
                 .trim();
+
+        // 0. Conversational Scene Q&A ("is there any car in front of me", "what is in front of me", "how far is the car")
+        if (SceneVoiceAssistant.isAssistantQuery(clean)) {
+            listener.onStatusUpdate("💬 Asking: \"" + clean + "\"");
+            listener.onSceneAssistantQuery(clean);
+            return;
+        }
 
         // 1. Walking Navigation ("take me to...", "navigate to...", "walk to...", "directions to...")
         if (clean.startsWith("navigate to") || clean.startsWith("directions to")

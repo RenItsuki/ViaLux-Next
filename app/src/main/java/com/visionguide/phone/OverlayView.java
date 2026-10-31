@@ -54,10 +54,17 @@ public final class OverlayView extends View {
         textPaint.setShadowLayer(5f, 0f, 0f, Color.BLACK);
     }
 
+    private DualCameraDepthEstimator depthEstimator;
+
     void update(List<Detection> newDetections, GuidanceEngine engine, int sourceWidth, int sourceHeight) {
+        update(newDetections, engine, null, sourceWidth, sourceHeight);
+    }
+
+    void update(List<Detection> newDetections, GuidanceEngine engine, DualCameraDepthEstimator depth, int sourceWidth, int sourceHeight) {
         detections.clear();
         detections.addAll(newDetections);
         guidanceEngine = engine;
+        depthEstimator = depth;
         imageWidth = Math.max(1, sourceWidth);
         imageHeight = Math.max(1, sourceHeight);
         invalidate();
@@ -88,8 +95,13 @@ public final class OverlayView extends View {
             canvas.drawRect(mapped, boxPaint);
             String cell = GuidanceEngine.gridCellFor(detection, imageWidth, imageHeight);
             String prefix = isHazard ? "⚠️ " : "";
-            String text = String.format(Locale.US, "%s%s %.0f%% | %s | %s",
-                    prefix, detection.label, detection.confidence * 100f, cell, moving ? "moving" : "still");
+            String distText = "";
+            if (depthEstimator != null) {
+                float distM = depthEstimator.estimateDistanceMeters(detection, imageWidth, imageHeight);
+                distText = String.format(Locale.US, " · %.1fm", distM);
+            }
+            String text = String.format(Locale.US, "%s%s%s | %s",
+                    prefix, detection.label, distText, cell);
             canvas.drawText(text, mapped.left, Math.max(42f, mapped.top - 10f), textPaint);
         }
     }

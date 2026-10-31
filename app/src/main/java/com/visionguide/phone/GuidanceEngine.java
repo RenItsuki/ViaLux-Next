@@ -36,6 +36,10 @@ final class GuidanceEngine {
     }
 
     Guidance evaluate(List<Detection> detections, int width, int height, long now, AppSettings settings) {
+        return evaluate(detections, width, height, now, settings, null);
+    }
+
+    Guidance evaluate(List<Detection> detections, int width, int height, long now, AppSettings settings, DualCameraDepthEstimator depthEstimator) {
         updateTracks(detections, width, height, now, settings);
         Detection candidate = bestDetection(detections, width, height, settings);
         if (candidate == null) {
@@ -55,10 +59,16 @@ final class GuidanceEngine {
 
         String region   = regionFor(candidate, width);
         String cell     = gridCellFor(candidate, width, height);
-        String distance = distanceBand(candidate, width, height);
+        String distance;
+        if (depthEstimator != null) {
+            float m = depthEstimator.estimateDistanceMeters(candidate, width, height);
+            distance = depthEstimator.formatDistanceSpoken(m);
+        } else {
+            distance = distanceBand(candidate, width, height);
+        }
         boolean moving  = memory.moving;
         float areaRatio = candidate.areaRatio(width, height);
-        boolean emergency = region.equals("center") && distance.equals("very close");
+        boolean emergency = region.equals("center") && (distance.contains("very close") || areaRatio >= 0.22f);
 
         expire(now);
         int priority = priorityFor(candidate, moving, emergency, areaRatio);
@@ -166,8 +176,7 @@ final class GuidanceEngine {
     private float score(Detection detection, int width, int height) {
         String label = detection.label.toLowerCase(Locale.US);
         float priority;
-        if (label.contains("stair"))                                       priority = 1050; // stairs are critical fall hazards
-        else if (label.equals("person") || label.equals("pedestrian"))     priority = 1000;
+        if (label.equals("person") || label.equals("pedestrian"))          priority = 1000;
         else if (label.equals("car") || label.equals("bus")
                 || label.equals("truck") || label.equals("train"))         priority = 950;
         else if (label.equals("bicycle") || label.equals("motorcycle"))    priority = 850;
@@ -187,7 +196,7 @@ final class GuidanceEngine {
         return Guidance.PRIORITY_INFO;
     }
 
-    // ── Label classification ───────────────────────────────────────────────
+    // ── Label classification ───────────────────────────────────────
 
     static boolean isImportantLabel(String rawLabel) {
         String label = rawLabel.toLowerCase(Locale.US);
@@ -203,8 +212,7 @@ final class GuidanceEngine {
 
     static boolean isHazardLabel(String rawLabel) {
         String label = rawLabel.toLowerCase(Locale.US);
-        return label.contains("stair")
-                || label.equals("escalator")
+        return label.equals("escalator")
                 || label.equals("elevator")
                 || label.equals("curb")
                 || label.equals("pole")

@@ -1,6 +1,6 @@
 # Via Lux (ViaLux-Next)
 
-**Via Lux** is an Android mobile vision and voice-guided scene awareness assistant designed for visual accessibility. Developed after completing the Clever Harvey AI program, it combines multiple on-device AI models, computer vision heuristics, spoken guidance, proactive OCR scene reading, turn-by-turn walking navigation, and NFC medicine identification.
+**Via Lux** is an Android mobile vision and voice-guided scene awareness assistant designed for visual accessibility. Developed after completing the Clever Harvey AI program, it combines on-device YOLO26n object detection, dual-camera geometric depth estimation, a conversational natural-language visual scene assistant, proactive OCR text reading, turn-by-turn walking navigation, and NFC medicine identification.
 
 > ⚠️ **Important Disclaimer:** Via Lux is an educational and exploratory prototype. It is **not** a certified medical device, safety aid, or mobility replacement, and does **not** guarantee obstacle or collision avoidance.
 
@@ -8,55 +8,56 @@
 
 ## 🌟 Key Features
 
-### 1. Hands-Free Voice Control & App Opening Spoken Options
-Operate the app entirely without looking at or touching the screen:
-- **Spoken Onboarding on Launch:** As soon as you open the app, Via Lux speaks:
-  > *"Welcome to Via Lux. You can say: 'Start camera' for obstacle detection, 'Take me to' followed by a destination to navigate, 'Read text' to read signs, or 'Check NFC' for medicine. Say 'Start' anytime to begin."*
-- **"Take me to [destination]" / "Navigate to [place]"** (e.g. *"Take me to Shaheed Sukhdev College"*, *"Walk to Central Metro"*) — Resolves destinations using Android's native Geocoder, calculates walking directions/compass bearing, and speaks step-by-step guidance.
-- **"Open Google Maps" / "Show map"** — Seamlessly launches Google Maps in turn-by-turn walking mode.
-- **"Start" / "Start camera" / "Open camera"** — Starts live detection and spatial tracking.
-- **"Stop" / "Stop camera" / "Pause"** — Stops the camera and freezes guidance.
-- **"Read" / "Read text" / "Yes" / "Read it"** — Reads visible text aloud.
-- **"Check NFC" / "Scan medicine"** — Activates NFC scanning and guides you to hold the tag to the back of the phone.
-- **"Repeat"** — Repeats the last spoken announcement.
-- **"Help" / "Options"** — Speaks all available voice commands.
-- **Tap Anywhere to Speak:** Tapping the main guidance card or waving your hand over the proximity sensor immediately opens the microphone for your command.
+### 1. Conversational Visual Scene Voice Assistant
+Ask questions in natural English and hear direct, immediate answers based on what your camera sees:
+- **"Is there any car in front of me?"**
+  > *"Yes, there is a car directly in front of you, approximately 2.8 metres away."* or *"No, there are no cars in front of you. The path directly ahead is clear."*
+- **"Is there anyone near me?"**
+  > *"Yes, there is a person on your right, about 2.1 metres away."*
+- **"What is in front of me?" / "What do you see?"**
+  > *"In front of you, I see a chair at 1.4 metres and a person at 3.2 metres."*
+- **"Is the path clear?" / "Can I walk forward?"**
+  > *"Yes, your path directly ahead is clear for at least 3 metres."* or *"Caution: There is a chair directly ahead, 1.2 metres away. Step slightly right to walk around it."*
+- **"How far is the car?"**
+  > *"The car is approximately 3.1 metres away on your left."*
+- **"Is anything moving?"**
+  > *"Yes, a moving car is detected 4.2 metres ahead."* or *"Nothing is currently moving in front of you."*
+- **"What does the text say?"**
+  > Reads visible signs, packaging, or documents aloud.
 
-### 2. Proactive OCR Scene Reading ("Asks when it detects text")
-- **Automatic Text Presence Detection:** When you point the camera towards signs, documents, notices, or medicine packaging, Via Lux senses the text blocks and asks:
+### 2. Dual-Camera Metric Depth Estimation
+Replaces arbitrary 2D bounding-box heuristics with real physical optics:
+- **Camera2 Multi-Camera API:** Automatically detects multi-camera rear setups (`LOGICAL_MULTI_CAMERA`, physical wide + ultra-wide lenses).
+- **Physical Baseline Calibration:** Extracts physical sensor dimensions and translation vectors (`LENS_POSE_TRANSLATION`) to establish stereo baseline $B$ (typically 18–24mm).
+- **Metric Distance Guidance:** Uses pinhole optical geometry ($D = \frac{f \cdot H_{real}}{h_{px}}$) to announce true distance in metres (e.g. *"car ahead, 2.5 metres"*).
+- Displays exact metric distances directly on visual bounding boxes.
+
+### 3. Clean, Simple, Human-First UI
+- Free of distracting technical clutter and AI buzzwords.
+- 4 large, high-contrast, easy-to-tap accessible action cards:
+  - `[▶ Start Camera]` (toggles to `[⏹ Stop Camera]`)
+  - `[📖 Read Text]`
+  - `[🧭 Navigate]`
+  - `[🏷️ Medicine (NFC)]`
+- Large primary guidance text card that responds immediately when tapped.
+- Clear status bar: *"Ready · Dual Camera Active (20mm baseline)"*.
+
+### 4. Proactive OCR Scene Reading ("Asks when it detects text")
+- **Automatic Text Presence Detection:** When pointed at signs, labels, or medicine packaging, Via Lux senses text blocks and asks:
   > *"Text detected: [words]. Would you like me to read it? Say read or yes."*
-- **Hands-Free Confirmation:** Simply say *"read"*, *"yes"*, or tap the screen to hear the text read out loud.
-- **Spoken Completion:** Once all text has been read aloud, Via Lux cleanly concludes:
-  > *"... Finished reading text."*
+- **Zero-Touch Confirmation:** Say *"read"*, *"yes"*, or tap the screen to hear the text read out loud.
+- **Spoken Completion:** Concludes with: *"... Finished reading text."*
 
-### 3. Multi-Tier Walking Navigation (Resolved for Landmarks & College Campuses)
-- **Native Android Geocoder:** Resolves destinations (such as *"Shaheed Sukhdev College"*, hospitals, transit stations) with automatic phonetic typo tolerance without hitting rate-limiting servers.
-- **Spoken Walking Guidance:** Announces remaining distance and cardinal compass heading (e.g. *"Walk North towards Shaheed Sukhdev College for 450 metres"*).
-- **Direct Google Maps Walking Launcher:** Tap the prominent *"Open in Google Maps"* button or say *"Open Google Maps"* to launch the official Google Maps app in walking turn-by-turn navigation mode.
+### 5. Multi-Tier Walking Navigation (With Direct Google Maps Launcher)
+- **Native Android Geocoder:** Resolves landmarks (such as *"Shaheed Sukhdev College"*, stations, hospitals) without hitting external rate limits.
+- **Compass & Pedestrian Guidance:** Speaks remaining distance and cardinal heading (*"Walk North towards Shaheed Sukhdev College for 450 metres"*).
+- **Direct Google Maps Launcher:** Tap *"Open in Google Maps"* or say *"Open Google Maps"* to launch turn-by-turn walking directly inside Google Maps!
 
-### 4. Dual On-Device AI Models (Running Concurrently)
-- **General Object Detection (YOLO26n ONNX)**: Runs locally on CPU via ONNX Runtime Android to detect people, vehicles, bikes, chairs, and obstacles.
-- **Dedicated Stair Detection (StairVision YOLOv8n TFLite)**: Integrated directly from the StairVision project (trained on 400+ RGB-D stair images with 97.2% mAP@50). Classifies ascending stairs, descending stairs, and side-view stairs.
-- **Multi-Threaded Parallel Execution**: Both models run concurrently across background worker threads on every camera frame, minimizing latency.
-- **Intersection-over-Union (IoU) Deduplication**: Merges predictions and prunes redundant boxes while preserving objects located near stairs.
-- **Calmed Detection Pacing:** Paced at 750ms with spatial hysteresis to eliminate rapid-fire chatter and battery drain.
-
-### 5. NFC Medicine Identification ("Check NFC")
-- Say *"Check NFC"* or tap the *"Check NFC"* button:
-  > *"NFC is active. Hold any medicine package, NFC card, or sticker against the upper back of your phone."*
-- When an NFC tag is detected, the phone vibrates and speaks the medicine details:
-  - Registered tag: Speaks the medicine name and strength.
-  - Unregistered tag: Prompts you to register the medicine details in the app.
-- Stored securely on-device with `EncryptedSharedPreferences`.
-
-### 6. Modern Accessible UI
-- High-contrast AMOLED dark palette (`#080C12`) with bold text and WCAG AAA compliance.
-- Giant guidance hero card that acts as a primary touch target for voice control.
-- Live microphone status indicator with animated listening/speaking pills.
-- Dynamic visual overlay:
-  - 🟢 **Teal** bounding boxes for still objects
-  - 🟠 **Orange** bounding boxes for moving objects
-  - 🔴 **Coral Red with ⚠️ icon** for stairs and immediate hazards
+### 6. NFC Medicine Identification
+- Say *"Check NFC"* or tap the *"Medicine (NFC)"* button:
+  > *"NFC active. Hold any medicine box or tag against the upper back of your phone."*
+- Tap any registered tag to hear its name and strength (e.g. *"Paracetamol, 500 mg"*).
+- Encrypted locally via Jetpack `EncryptedSharedPreferences`.
 
 ---
 
@@ -65,23 +66,22 @@ Operate the app entirely without looking at or touching the screen:
 ```
            Live Camera Feed (CameraX RGBA_8888)
                              │
-            ┌────────────────┴────────────────┐
-            ▼                                 ▼
-   YOLO26n (ONNX Runtime)            StairVision (TFLite)
-  General Objects & People          Ascending/Descending Stairs
-            │                                 │
-            └────────────────┬────────────────┘
                              ▼
-         DetectionMerger.java (IoU Deduplication)
+                  YOLO26n (ONNX Runtime)
+             Fast, Low-Power Object Detection
                              │
             ┌────────────────┼────────────────┐
             ▼                ▼                ▼
-     GuidanceEngine   OcrProcessor    NavigationGuide
-   (Spatial 3x3 Grid)  (Scene Text)   (Native Geocoder)
+   DualCameraDepth    OcrProcessor    NavigationGuide
+   (Optical Optics)   (Scene Text)   (Native Geocoder)
             │                │                │
-            └────────────────┴────────────────┘
+            └────────────────┬────────────────┘
                              ▼
-                     SpeechGuide.java
+                    SceneVoiceAssistant
+         (Conversational Natural Language Q&A)
+                             │
+                             ▼
+                      SpeechGuide.java
             (Anti-Feedback + Utterance Locks)
 ```
 
@@ -92,7 +92,7 @@ Operate the app entirely without looking at or touching the screen:
 ### Requirements
 - Android Studio Hedgehog (2023.1.1) or newer
 - Android Device running Android 8.0+ (API 26+)
-- Rear camera and Microphone permissions
+- Rear camera (Dual rear cameras supported for enhanced depth)
 
 ### Build via Gradle
 ```bash

@@ -51,7 +51,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private static final int REQ_AUDIO    = 44;
 
     // ── Timing ────────────────────────────────────────────────────────────
-    private static final long ANALYSIS_INTERVAL_MS = 350;
+    private static final long ANALYSIS_INTERVAL_MS = 750;
     private static final long ONLINE_INTERVAL_MS   = 2000;
 
     // ── UI Components ─────────────────────────────────────────────────────

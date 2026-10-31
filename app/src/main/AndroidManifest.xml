@@ -18,6 +18,13 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Queries for Android 11+ Package Visibility (Required for SpeechRecognizer) -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <!-- Hardware features -->
     <uses-feature android:name="android.hardware.camera"          android:required="true" />
     <uses-feature android:name="android.hardware.microphone"      android:required="false" />

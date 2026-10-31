@@ -38,10 +38,10 @@ final class AppSettings {
     }
 
     void load() {
-        speechDelayMs      = prefs.getInt("speechDelayMs",      2000);
-        repeatCooldownMs   = prefs.getInt("repeatCooldownMs",   10000);
-        motionThreshold    = prefs.getFloat("motionThreshold",  0.040f);
-        motionStreakFrames  = prefs.getInt("motionStreakFrames", 3);
+        speechDelayMs      = prefs.getInt("speechDelayMs",      3500);
+        repeatCooldownMs   = prefs.getInt("repeatCooldownMs",   15000);
+        motionThreshold    = prefs.getFloat("motionThreshold",  0.060f);
+        motionStreakFrames  = prefs.getInt("motionStreakFrames", 4);
         notifyAreaRatio    = prefs.getFloat("notifyAreaRatio",  0.035f);
         edgeIgnoreRatio    = prefs.getFloat("edgeIgnoreRatio",  0.18f);
         priorityOverride   = prefs.getBoolean("priorityOverride", true);
@@ -78,10 +78,10 @@ final class AppSettings {
     }
 
     void resetDefaults() {
-        speechDelayMs     = 2000;
-        repeatCooldownMs  = 10000;
-        motionThreshold   = 0.040f;
-        motionStreakFrames = 3;
+        speechDelayMs     = 3500;
+        repeatCooldownMs  = 15000;
+        motionThreshold   = 0.060f;
+        motionStreakFrames = 4;
         notifyAreaRatio   = 0.035f;
         edgeIgnoreRatio   = 0.18f;
         priorityOverride  = true;
@@ -89,7 +89,7 @@ final class AppSettings {
         navigationEnabled = true;
         nfcEnabled        = true;
         ocrEnabled        = true;
-        ocrIntervalMs     = 3000;
+        ocrIntervalMs     = 2500;
         // Note: API keys are NOT reset to avoid losing credentials
         save();
     }

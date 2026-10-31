@@ -77,12 +77,22 @@ final class VoiceNavigationManager implements SensorEventListener {
     }
 
     private void initRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+        try {
+            if (speechRecognizer != null) {
+                speechRecognizer.destroy();
+                speechRecognizer = null;
+            }
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context);
+        } catch (Exception e) {
+            Log.w(TAG, "Speech recognition initialization failed: " + e.getMessage());
+            return;
+        }
+
+        if (speechRecognizer == null) {
             Log.w(TAG, "Speech recognition is not available on this device.");
             return;
         }
 
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context);
         recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
@@ -94,7 +104,7 @@ final class VoiceNavigationManager implements SensorEventListener {
             public void onReadyForSpeech(Bundle params) {
                 isListening = true;
                 listener.onListeningStateChanged(true);
-                listener.onStatusUpdate("🎙️ Hands-Free Listening... Say 'Start', 'Read text', or 'Navigate to...'");
+                listener.onStatusUpdate("🎙️ Hands-Free Listening... (Say 'Start', 'Read text', or 'Navigate to...')");
             }
 
             @Override public void onBeginningOfSpeech() {}
@@ -112,9 +122,12 @@ final class VoiceNavigationManager implements SensorEventListener {
                 isListening = false;
                 listener.onListeningStateChanged(false);
 
+                // Wait longer if recognizer is busy, otherwise resume promptly
+                long delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) ? 1200 : 450;
+
                 // In continuous mode, automatically loop back and resume listening
                 if (continuousEnabled && !destroyed && !isTtsSpeaking) {
-                    mainHandler.postDelayed(() -> restartListeningLoop(), 400);
+                    mainHandler.postDelayed(() -> restartListeningLoop(), delay);
                 }
             }
 
@@ -175,12 +188,16 @@ final class VoiceNavigationManager implements SensorEventListener {
         }
         if (speechRecognizer != null && !isListening) {
             try {
-                speechRecognizer.cancel();
                 speechRecognizer.startListening(recognizerIntent);
+                isListening = true;
             } catch (Exception e) {
                 Log.e(TAG, "Error starting voice recognition: " + e.getMessage());
+                try {
+                    speechRecognizer.cancel();
+                } catch (Exception ignored) {}
+                isListening = false;
                 // Retry after brief debounce
-                mainHandler.postDelayed(() -> restartListeningLoop(), 1000);
+                mainHandler.postDelayed(() -> restartListeningLoop(), 1200);
             }
         }
     }

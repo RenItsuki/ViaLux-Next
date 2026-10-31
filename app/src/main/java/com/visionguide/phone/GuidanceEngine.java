@@ -8,13 +8,18 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * GuidanceEngine — evaluates a merged list of detections each frame and decides
- * what (if anything) to speak. Extends the original 3×3 grid + motion/distance
- * logic with hazard-class support (stairs, curbs, crossings, etc.) and cautious
- * wording for classes that have not been validated on real footage.
+ * GuidanceEngine — Evaluates merged detections and paces voice announcements.
+ *
+ * Designed for calm, clear accessibility:
+ *   - Spatial Hysteresis: Anchored by object label, rough region (left/center/right),
+ *     and distance band, preventing jitter from hand tremor.
+ *   - Walking Filter: High-threshold motion tracking prevents walking ego-motion
+ *     from falsely tagging every object as "moving".
+ *   - Calm Speech Pacing: Restricts urgent interrupts to genuine collision hazards,
+ *     ensuring sentences are spoken clearly and completely without constant interruptions.
  */
 final class GuidanceEngine {
-    private static final long CLEAR_MS = 4000;
+    private static final long CLEAR_MS = 15000; // 15 seconds between "path is clear" messages
 
     private final Map<String, TrackMemory> tracks = new HashMap<>();
     private final Map<String, SpokenState> spokenStates = new HashMap<>();
@@ -52,13 +57,15 @@ final class GuidanceEngine {
         String cell     = gridCellFor(candidate, width, height);
         String distance = distanceBand(candidate, width, height);
         boolean moving  = memory.moving;
+        float areaRatio = candidate.areaRatio(width, height);
         boolean emergency = region.equals("center") && distance.equals("very close");
+
         expire(now);
-        int priority = priorityFor(candidate, moving, emergency);
+        int priority = priorityFor(candidate, moving, emergency, areaRatio);
         String message = messageFor(candidate, region, cell, distance, detections, width, height, emergency, moving, settings);
         Guidance guidance = new Guidance(message, emergency, candidate, moving, priority);
-        String stateSignature = stateSignature(cell, distance, moving, emergency);
-        Guidance spoken = maybeSpeak(guidance, key, stateSignature, now, settings);
+        String stateSignature = stateSignature(region, distance, emergency);
+        Guidance spoken = maybeSpeak(guidance, candidate.label.toLowerCase(Locale.US), stateSignature, now, settings);
         if (spoken != null) memory.lastAnnounced = now;
         return spoken;
     }
@@ -94,7 +101,7 @@ final class GuidanceEngine {
             TrackMemory old = tracks.get(key);
             PointF center = new PointF(detection.centerX(), detection.centerY());
             boolean rawMotion = old != null && moved(old.center, center, width, height, settings.motionThreshold);
-            int streak = old == null ? 0 : rawMotion ? Math.min(5, old.motionStreak + 1) : Math.max(0, old.motionStreak - 1);
+            int streak = old == null ? 0 : rawMotion ? Math.min(6, old.motionStreak + 1) : Math.max(0, old.motionStreak - 1);
             long announced = old == null ? 0 : old.lastAnnounced;
             tracks.put(key, new TrackMemory(center, now, announced, streak, streak >= settings.motionStreakFrames));
         }
@@ -108,15 +115,20 @@ final class GuidanceEngine {
         if (sameObjectSameState && guidance.priority <= oldState.priority && now - oldState.spokenAt < settings.repeatCooldownMs) {
             return null;
         }
+
         SpokenState oldSceneState = spokenStates.get("scene:" + stateSignature);
         boolean sameSceneSameState = oldSceneState != null
                 && guidance.priority <= oldSceneState.priority
                 && now - oldSceneState.spokenAt < settings.repeatCooldownMs;
         if (sameSceneSameState) return null;
 
-        boolean priorityJump = settings.priorityOverride && guidance.priority > lastSpeechPriority;
+        // Only true emergencies jump the speech delay
+        boolean priorityJump = settings.priorityOverride
+                && guidance.priority == Guidance.PRIORITY_URGENT
+                && lastSpeechPriority < Guidance.PRIORITY_URGENT;
         boolean due = lastSpeechAt == 0 || now - lastSpeechAt >= settings.speechDelayMs;
-        boolean urgentDue = guidance.priority == Guidance.PRIORITY_URGENT && now - lastSpeechAt >= 1200;
+        boolean urgentDue = guidance.priority == Guidance.PRIORITY_URGENT && now - lastSpeechAt >= 2500;
+
         if (!due && !priorityJump && !urgentDue) return null;
 
         lastSpeechAt = now;
@@ -154,27 +166,29 @@ final class GuidanceEngine {
     private float score(Detection detection, int width, int height) {
         String label = detection.label.toLowerCase(Locale.US);
         float priority;
-        if (label.equals("person") || label.equals("pedestrian"))          priority = 1000;
+        if (label.contains("stair"))                                       priority = 1050; // stairs are critical fall hazards
+        else if (label.equals("person") || label.equals("pedestrian"))     priority = 1000;
         else if (label.equals("car") || label.equals("bus")
-                || label.equals("truck") || label.equals("train"))         priority = 900;
-        else if (label.equals("bicycle") || label.equals("motorcycle"))    priority = 800;
-        else if (isHazardLabel(label))                                      priority = 750;
+                || label.equals("truck") || label.equals("train"))         priority = 950;
+        else if (label.equals("bicycle") || label.equals("motorcycle"))    priority = 850;
+        else if (isHazardLabel(label))                                      priority = 800;
         else                                                                priority = 500;
-        if (isMoving(detection, width, height)) priority += 1200;
+
+        if (isMoving(detection, width, height)) priority += 300;
         return priority + detection.areaRatio(width, height) * 100f + detection.confidence;
     }
 
     // ── Priority ───────────────────────────────────────────────────────────
 
-    private static int priorityFor(Detection detection, boolean moving, boolean emergency) {
-        if (emergency || moving) return Guidance.PRIORITY_URGENT;
-        if (isImportantLabel(detection.label) || isHazardLabel(detection.label)) return Guidance.PRIORITY_IMPORTANT;
+    private static int priorityFor(Detection detection, boolean moving, boolean emergency, float areaRatio) {
+        if (emergency) return Guidance.PRIORITY_URGENT;
+        if (moving && areaRatio >= 0.12f) return Guidance.PRIORITY_URGENT;
+        if (isImportantLabel(detection.label) || isHazardLabel(detection.label) || moving) return Guidance.PRIORITY_IMPORTANT;
         return Guidance.PRIORITY_INFO;
     }
 
     // ── Label classification ───────────────────────────────────────────────
 
-    /** General-purpose important objects (people, vehicles). */
     static boolean isImportantLabel(String rawLabel) {
         String label = rawLabel.toLowerCase(Locale.US);
         return label.equals("person")
@@ -187,10 +201,6 @@ final class GuidanceEngine {
                 || label.equals("motorcycle");
     }
 
-    /**
-     * Accessibility hazard classes from BlindAid or a similar model.
-     * These use cautious wording ("Possible ...") until validated on real footage.
-     */
     static boolean isHazardLabel(String rawLabel) {
         String label = rawLabel.toLowerCase(Locale.US);
         return label.contains("stair")
@@ -224,25 +234,22 @@ final class GuidanceEngine {
         String direction = suggestDirection(detection, detections, width, height, distance, settings);
         String label = detection.label.toLowerCase(Locale.US);
 
-        // Emergency override
         if (emergency) {
-            return "Stop! " + label + " directly ahead. " + direction;
+            return "Caution: " + label + " directly ahead. " + direction;
         }
 
-        // Hazard classes use cautious wording
         if (isHazardLabel(label)) {
             String pos = region.equals("center") ? "ahead" : "to your " + region;
             String cautious = "Possible " + label + " " + pos + ", " + distance + ".";
             return appendDirection(cautious, direction);
         }
 
-        // Moving object
         if (moving) {
             String position = region.equals("center") ? "ahead" : "to your " + region;
-            return appendDirection("Moving " + label + " " + position + ", in the " + cell + ".", direction);
+            return appendDirection("Moving " + label + " " + position + ", " + distance + ".", direction);
         }
 
-        return appendDirection(label + " detected in the " + cell + ", " + distance + ".", direction);
+        return appendDirection(label + " " + (region.equals("center") ? "ahead" : "on your " + region) + ", " + distance + ".", direction);
     }
 
     private static String appendDirection(String base, String direction) {
@@ -258,12 +265,12 @@ final class GuidanceEngine {
         String region = regionFor(candidate, width);
         boolean leftBlocked  = blocked(detections, candidate, "left",  width, height);
         boolean rightBlocked = blocked(detections, candidate, "right", width, height);
-        if (region.equals("left"))  return "Move right.";
-        if (region.equals("right")) return "Move left.";
-        if (leftBlocked && rightBlocked) return "Stop; both sides are blocked.";
-        if (leftBlocked)  return "Move right.";
-        if (rightBlocked) return "Move left.";
-        return "Move slightly right.";
+        if (region.equals("left"))  return "Guide slightly right.";
+        if (region.equals("right")) return "Guide slightly left.";
+        if (leftBlocked && rightBlocked) return "Path narrow ahead.";
+        if (leftBlocked)  return "Guide right.";
+        if (rightBlocked) return "Guide left.";
+        return "Guide right.";
     }
 
     private static boolean isVerySide(Detection detection, int width, float edgeIgnoreRatio) {
@@ -274,7 +281,7 @@ final class GuidanceEngine {
     private static boolean blocked(List<Detection> detections, Detection candidate, String region, int width, int height) {
         for (Detection detection : detections) {
             if (detection == candidate) continue;
-            if (regionFor(detection, width).equals(region) && detection.areaRatio(width, height) >= 0.06f) return true;
+            if (regionFor(detection, width).equals(region) && detection.areaRatio(width, height) >= 0.08f) return true;
         }
         return false;
     }
@@ -286,16 +293,16 @@ final class GuidanceEngine {
     }
 
     private static String trackKey(Detection detection, int width, int height) {
-        return detection.label.toLowerCase(Locale.US) + ":" + gridCellFor(detection, width, height);
+        return detection.label.toLowerCase(Locale.US) + ":" + regionFor(detection, width);
     }
 
-    private static String stateSignature(String cell, String distance, boolean moving, boolean emergency) {
-        return cell + "|" + distance + "|" + moving + "|" + emergency;
+    private static String stateSignature(String region, String distance, boolean emergency) {
+        return region + "|" + distance + "|" + emergency;
     }
 
     private void expire(long now) {
-        tracks.entrySet().removeIf(entry -> now - entry.getValue().lastSeen > 2000);
-        spokenStates.entrySet().removeIf(entry -> now - entry.getValue().spokenAt > 30000);
+        tracks.entrySet().removeIf(entry -> now - entry.getValue().lastSeen > 2500);
+        spokenStates.entrySet().removeIf(entry -> now - entry.getValue().spokenAt > 40000);
     }
 
     // ── Inner classes ──────────────────────────────────────────────────────

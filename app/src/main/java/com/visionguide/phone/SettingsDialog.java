@@ -34,8 +34,8 @@ final class SettingsDialog {
 
         TextView speechLabel = label(context, "Speech delay: " + (settings.speechDelayMs / 1000f) + " sec");
         SeekBar speechDelay = new SeekBar(context);
-        speechDelay.setMax(5);
-        speechDelay.setProgress(Math.max(0, Math.min(5, settings.speechDelayMs / 500 - 2)));
+        speechDelay.setMax(8);
+        speechDelay.setProgress(Math.max(0, Math.min(8, Math.round(settings.speechDelayMs / 500f - 2))));
         speechDelay.setOnSeekBarChangeListener(simpleSeek(p -> speechLabel.setText("Speech delay: " + ((p + 2) * 0.5f) + " sec")));
 
         TextView repeatLabel = label(context, "Repeat same object: after " + (settings.repeatCooldownMs / 1000) + " sec");
@@ -46,7 +46,7 @@ final class SettingsDialog {
 
         TextView motionText = label(context, "Motion sensitivity");
         Spinner motionSpinner = spinner(context, new String[]{"Strong motion only", "Balanced", "Sensitive"});
-        motionSpinner.setSelection(settings.motionThreshold >= 0.055f ? 0 : settings.motionThreshold <= 0.025f ? 2 : 1);
+        motionSpinner.setSelection(settings.motionThreshold >= 0.070f ? 0 : settings.motionThreshold <= 0.040f ? 2 : 1);
 
         TextView distanceText = label(context, "Notify distance");
         Spinner distanceSpinner = spinner(context, new String[]{"Far or nearer", "Medium or nearer", "Close or nearer", "Very close only"});
@@ -137,8 +137,8 @@ final class SettingsDialog {
                     settings.speechDelayMs    = (speechDelay.getProgress() + 2) * 500;
                     settings.repeatCooldownMs = (repeatDelay.getProgress() + 1) * 5000;
                     int motion = motionSpinner.getSelectedItemPosition();
-                    settings.motionThreshold    = motion == 0 ? 0.060f : motion == 2 ? 0.025f : 0.040f;
-                    settings.motionStreakFrames  = motion == 0 ? 3 : motion == 2 ? 2 : 3;
+                    settings.motionThreshold    = motion == 0 ? 0.080f : motion == 2 ? 0.035f : 0.060f;
+                    settings.motionStreakFrames  = motion == 0 ? 5 : motion == 2 ? 3 : 4;
                     int distance = distanceSpinner.getSelectedItemPosition();
                     settings.notifyAreaRatio  = distance == 3 ? 0.25f : distance == 2 ? 0.10f : distance == 1 ? 0.035f : 0.015f;
                     settings.edgeIgnoreRatio  = (edgeSeek.getProgress() + 10) / 100f;

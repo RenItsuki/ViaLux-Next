@@ -27,6 +27,10 @@ android {
     buildFeatures {
         buildConfig true
     }
+
+    androidResources {
+        noCompress 'tflite'
+    }
 }
 
 dependencies {
@@ -41,8 +45,11 @@ dependencies {
     implementation "androidx.camera:camera-lifecycle:${cameraxVersion}"
     implementation "androidx.camera:camera-view:${cameraxVersion}"
 
-    // ONNX Runtime (existing YOLO model)
+    // ONNX Runtime (general-purpose YOLO model)
     implementation "com.microsoft.onnxruntime:onnxruntime-android:1.26.0"
+
+    // TensorFlow Lite (StairVision stair detector)
+    implementation "org.tensorflow:tensorflow-lite:2.16.1"
 
     // ML Kit OCR (on-device, no API key required)
     implementation "com.google.mlkit:text-recognition:16.0.1"

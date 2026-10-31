@@ -193,10 +193,7 @@ final class GuidanceEngine {
      */
     static boolean isHazardLabel(String rawLabel) {
         String label = rawLabel.toLowerCase(Locale.US);
-        return label.equals("stairs")
-                || label.equals("stair")
-                || label.equals("up stairs")
-                || label.equals("down stairs")
+        return label.contains("stair")
                 || label.equals("escalator")
                 || label.equals("elevator")
                 || label.equals("curb")

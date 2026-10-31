@@ -68,6 +68,7 @@ public final class MainActivity extends AppCompatActivity {
     private GuidanceEngine guidanceEngine;
     private AppSettings settings;
     private YoloOnnxDetector detector;
+    private StairVisionDetector stairDetector;
     private OcrProcessor ocrProcessor;
     private RoboflowClient roboflowClient;
     private NavigationGuide navigationGuide;
@@ -155,6 +156,7 @@ public final class MainActivity extends AppCompatActivity {
         if (cameraExecutor != null) cameraExecutor.shutdownNow();
         if (onlineExecutor != null) onlineExecutor.shutdownNow();
         if (detector != null) { try { detector.close(); } catch (Exception ignored) {} }
+        if (stairDetector != null) { try { stairDetector.close(); } catch (Exception ignored) {} }
     }
 
     @Override
@@ -323,6 +325,11 @@ public final class MainActivity extends AppCompatActivity {
         cameraExecutor.execute(() -> {
             try {
                 detector = new YoloOnnxDetector(this);
+                try {
+                    stairDetector = new StairVisionDetector(this);
+                } catch (Exception e) {
+                    android.util.Log.w("MainActivity", "StairVision optional load error: " + e.getMessage());
+                }
                 runOnUiThread(() -> statusText.setText("AI ready. Press Start."));
             } catch (Exception e) {
                 runOnUiThread(() -> {
@@ -411,6 +418,15 @@ public final class MainActivity extends AppCompatActivity {
 
             // ── Local inference ─────────────────────────────────────────
             List<Detection> local = localDetector.detect(bitmap);
+
+            // ── StairVision offline stair detection ─────────────────────
+            StairVisionDetector localStairDetector = stairDetector;
+            if (localStairDetector != null) {
+                List<Detection> stairDetections = localStairDetector.detect(bitmap);
+                if (!stairDetections.isEmpty()) {
+                    local = DetectionMerger.merge(local, stairDetections);
+                }
+            }
 
             // ── Online inference (throttled, non-blocking) ──────────────
             if (settings.onlineModeEnabled

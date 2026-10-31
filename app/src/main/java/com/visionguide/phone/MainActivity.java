@@ -92,7 +92,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private MedicineStore medicineStore;
     private VoiceNavigationManager voiceNav;
     private Vibrator vibrator;
-    private QwenVoiceAssistant qwenAssistant;
+    private GeminiVoiceAssistant geminiAssistant;
 
     private ProcessCameraProvider cameraProvider;
     private ExecutorService cameraExecutor;
@@ -112,8 +112,9 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private volatile int currentImageWidth = 640;
     private volatile int currentImageHeight = 480;
 
-    // Text presence asking state
+    // Text presence asking state & high-res frame for Gemini Vision
     private String pendingDetectedText = null;
+    private volatile Bitmap pendingTextBitmap = null;
     private long lastTextAskAt = 0;
     private boolean textConfirmationActive = false;
 
@@ -152,25 +153,17 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         voiceNav        = new VoiceNavigationManager(this, this);
         vibrator        = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
-        qwenAssistant   = new QwenVoiceAssistant(this);
+        geminiAssistant = new GeminiVoiceAssistant(this, settings);
 
-        qwenAssistant.loadModelAsync(new QwenVoiceAssistant.ModelStatusCallback() {
-            @Override
-            public void onStatusChanged(boolean isReady, String message) {
-                runOnUiThread(() -> {
-                    if (isReady) {
-                        statusPill.setText("🧠 Qwen AI");
-                        statusPill.setTextColor(0xFF00E699);
-                        voiceStatusText.setText("🧠 Qwen 2.5 Voice AI ready! Ask 'What should I do first?'");
-                    }
-                });
+        geminiAssistant.initialize((isReady, message) -> runOnUiThread(() -> {
+            if (isReady) {
+                statusPill.setText("✨ Gemini AI");
+                statusPill.setTextColor(0xFF00E699);
+                voiceStatusText.setText("✨ " + message + " · Tap anywhere to speak");
+            } else {
+                voiceStatusText.setText(message);
             }
-
-            @Override
-            public void onDownloadProgress(int percent, String progressText) {
-                runOnUiThread(() -> voiceStatusText.setText("📥 Downloading Qwen AI: " + progressText));
-            }
-        });
+        }));
 
         speechGuide.setTtsStateListener(new SpeechGuide.TtsStateListener() {
             @Override
@@ -234,7 +227,11 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         if (ocrProcessor    != null) ocrProcessor.shutdown();
         if (navigationGuide != null) navigationGuide.stop();
         if (voiceNav        != null) voiceNav.shutdown();
-        if (qwenAssistant   != null) qwenAssistant.shutdown();
+        if (geminiAssistant != null) geminiAssistant.shutdown();
+        if (pendingTextBitmap != null && !pendingTextBitmap.isRecycled()) {
+            pendingTextBitmap.recycle();
+            pendingTextBitmap = null;
+        }
         if (cameraExecutor  != null) cameraExecutor.shutdownNow();
         if (onlineExecutor  != null) onlineExecutor.shutdownNow();
         if (detector        != null) { try { detector.close(); } catch (Exception ignored) {} }
@@ -416,11 +413,17 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         helpBtn.setOnClickListener(v -> onHelpCommand());
 
         settingsButton = button("⚙️ Settings", 0xFF1C222C, 0xFF8A9BA8);
-        settingsButton.setOnClickListener(v -> SettingsDialog.show(this, settings, qwenAssistant, () -> {
+        settingsButton.setOnClickListener(v -> SettingsDialog.show(this, settings, geminiAssistant, () -> {
             settings.load();
             guidanceEngine.reset();
             ocrProcessor.setIntervalMs(settings.ocrIntervalMs);
             voiceNav.setContinuousEnabled(settings.continuousVoiceEnabled);
+            geminiAssistant.initialize((isReady, msg) -> runOnUiThread(() -> {
+                if (isReady) {
+                    statusPill.setText("✨ Gemini AI");
+                    voiceStatusText.setText("✨ " + msg);
+                }
+            }));
             Toast.makeText(this, "Settings saved.", Toast.LENGTH_SHORT).show();
         }));
 
@@ -458,6 +461,11 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         root.addView(panel, guideParams);
+
+        // Entire screen acts as an accessible tap target for blind navigation
+        root.setClickable(true);
+        root.setFocusable(true);
+        root.setOnClickListener(v -> onGuidanceCardTapped());
 
         setContentView(root);
     }
@@ -522,50 +530,35 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     public void onSceneAssistantQuery(String question) {
         runOnUiThread(() -> {
             vibrate();
-            voiceStatusText.setText("🧠 Analyzing scene...");
-            String navInst = navigationGuide.isActive() ? guidanceText.getText().toString() : "";
-            if (qwenAssistant != null) {
-                qwenAssistant.answerQuery(
-                        question,
-                        currentDetections,
-                        depthEstimator,
-                        guidanceEngine,
-                        currentImageWidth,
-                        currentImageHeight,
-                        ocrProcessor.repeat(),
-                        navInst,
-                        (speechAnswer, actionIntent, destinationParam) -> {
-                            guidanceText.setText(speechAnswer);
-                            speechGuide.forceSpeak(speechAnswer, true);
-                            voiceStatusText.setText("💬 " + question);
+            voiceStatusText.setText("✨ Gemini thinking...");
+            geminiAssistant.askAssistant(
+                    question,
+                    currentDetections,
+                    depthEstimator,
+                    guidanceEngine,
+                    currentImageWidth,
+                    currentImageHeight,
+                    ocrProcessor.repeat(),
+                    (speechAnswer, actionIntent, destinationParam) -> {
+                        guidanceText.setText(speechAnswer);
+                        speechGuide.forceSpeak(speechAnswer, true);
+                        voiceStatusText.setText("💬 " + question);
 
-                            if ("NAVIGATE".equals(actionIntent) && destinationParam != null && !destinationParam.isEmpty()) {
-                                requestLocationThenNavigate(destinationParam);
-                            } else if ("START_CAMERA".equals(actionIntent)) {
-                                if (!running) startDetection();
-                            } else if ("STOP_CAMERA".equals(actionIntent)) {
-                                if (running) stopDetection();
-                            } else if ("READ_TEXT".equals(actionIntent)) {
-                                triggerOcrRead();
-                            } else if ("CHECK_NFC".equals(actionIntent)) {
-                                onCheckNfcCommand();
-                            }
+                        if ("NAVIGATE".equals(actionIntent) && destinationParam != null && !destinationParam.isEmpty()) {
+                            requestLocationThenNavigate(destinationParam);
+                        } else if ("START_CAMERA".equals(actionIntent)) {
+                            if (!running) startDetection();
+                        } else if ("STOP_CAMERA".equals(actionIntent)) {
+                            if (running) stopDetection();
+                        } else if ("READ_TEXT".equals(actionIntent)) {
+                            triggerOcrRead();
+                        } else if ("CHECK_NFC".equals(actionIntent)) {
+                            onCheckNfcCommand();
+                        } else if ("STOP".equals(actionIntent)) {
+                            speechGuide.stopSpeaking();
                         }
-                );
-            } else {
-                String answer = SceneVoiceAssistant.answerQuery(
-                        question,
-                        currentDetections,
-                        depthEstimator,
-                        guidanceEngine,
-                        currentImageWidth,
-                        currentImageHeight,
-                        ocrProcessor.repeat()
-                );
-                guidanceText.setText(answer);
-                speechGuide.forceSpeak(answer, true);
-                voiceStatusText.setText("💬 " + question);
-            }
+                    }
+            );
         });
     }
 
@@ -581,6 +574,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     public void onStopCommand() {
         runOnUiThread(() -> {
             vibrate();
+            speechGuide.stopSpeaking();
             if (running) stopDetection();
         });
     }
@@ -594,14 +588,49 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     public void onTextConfirmedCommand() {
         runOnUiThread(() -> {
             vibrate();
-            if (pendingDetectedText != null && !pendingDetectedText.isEmpty()) {
+            textConfirmationActive = false;
+            voiceNav.stopListening();
+            guidanceText.setText("📖 Reading text with Gemini...");
+            voiceStatusText.setText("📖 Reading text clearly...");
+            speechGuide.forceSpeak("Reading text", true);
+
+            if (pendingTextBitmap != null && !pendingTextBitmap.isRecycled()) {
+                final Bitmap textBmp = pendingTextBitmap;
+                pendingTextBitmap = null;
+                geminiAssistant.readImageWithGemini(textBmp, readableText -> {
+                    if (!textBmp.isRecycled()) textBmp.recycle();
+                    String spoken = readableText + ". Finished reading text.";
+                    guidanceText.setText(spoken);
+                    speechGuide.forceSpeak(spoken, true);
+                    voiceStatusText.setText("✓ Finished reading text.");
+                });
+            } else if (pendingDetectedText != null && !pendingDetectedText.isEmpty()) {
                 String textToSpeak = pendingDetectedText + ". Finished reading text.";
                 guidanceText.setText(textToSpeak);
                 speechGuide.forceSpeak(textToSpeak, true);
                 pendingDetectedText = null;
-                textConfirmationActive = false;
+                voiceStatusText.setText("✓ Finished reading text.");
             } else {
                 triggerOcrRead();
+            }
+        });
+    }
+
+    @Override
+    public void onTextRejectedCommand() {
+        runOnUiThread(() -> {
+            vibrate();
+            if (textConfirmationActive) {
+                textConfirmationActive = false;
+                if (pendingTextBitmap != null && !pendingTextBitmap.isRecycled()) {
+                    pendingTextBitmap.recycle();
+                    pendingTextBitmap = null;
+                }
+                pendingDetectedText = null;
+                speechGuide.forceSpeak("Text reading cancelled.", true);
+                voiceStatusText.setText("Text reading cancelled.");
+            } else {
+                speechGuide.stopSpeaking();
             }
         });
     }
@@ -880,23 +909,41 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
             // ── Passive Scene Text Detection ("Ask when it detects text") ──
             if (settings.ocrEnabled) {
-                ocrProcessor.checkTextPresence(bitmap, now, (sample, fullText) -> runOnUiThread(() -> {
+                ocrProcessor.checkStationaryText(bitmap, now, (sample, fullText, frameCopy) -> runOnUiThread(() -> {
                     long t = SystemClock.elapsedRealtime();
                     if (!textConfirmationActive && t - lastTextAskAt > 15000) {
                         lastTextAskAt = t;
+                        if (pendingTextBitmap != null && !pendingTextBitmap.isRecycled()) {
+                            pendingTextBitmap.recycle();
+                        }
+                        pendingTextBitmap = frameCopy;
                         pendingDetectedText = fullText;
                         textConfirmationActive = true;
-                        vibrate();
-                        guidanceText.setText("📖 Text Detected: \"" + sample + "\"\nSay 'Read' or 'Yes' to hear it, or tap here.");
-                        speechGuide.forceSpeak("Text detected: " + sample + ". Would you like me to read it? Say read or yes.", true);
+                        vibrateStationaryText();
+                        guidanceText.setText("📖 Stationary text detected ahead.\nSay 'Yes' or tap anywhere to read.");
+                        voiceStatusText.setText("🎙️ Listening... Say 'Yes' or 'Read it', or tap anywhere");
 
-                        // 8-second confirmation window
+                        speechGuide.forceSpeak("I see text ahead. Would you like me to read it?", true, () -> {
+                            if (textConfirmationActive) {
+                                voiceNav.forceStartListening();
+                            }
+                        });
+
+                        // 9-second confirmation window
                         mainHandler.postDelayed(() -> {
                             if (textConfirmationActive) {
                                 textConfirmationActive = false;
+                                if (pendingTextBitmap != null && !pendingTextBitmap.isRecycled()) {
+                                    pendingTextBitmap.recycle();
+                                    pendingTextBitmap = null;
+                                }
                                 pendingDetectedText = null;
                             }
-                        }, 8000);
+                        }, 9000);
+                    } else {
+                        if (frameCopy != null && !frameCopy.isRecycled()) {
+                            frameCopy.recycle();
+                        }
                     }
                 }));
 
@@ -1011,6 +1058,17 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
                 vibrator.vibrate(VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE));
             } else {
                 vibrator.vibrate(45);
+            }
+        }
+    }
+
+    private void vibrateStationaryText() {
+        if (vibrator != null && vibrator.hasVibrator()) {
+            long[] pattern = {0, 80, 80, 80, 80, 100};
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1));
+            } else {
+                vibrator.vibrate(pattern, -1);
             }
         }
     }

@@ -48,6 +48,7 @@ final class VoiceNavigationManager implements SensorEventListener {
         void onStopCommand();
         void onReadTextCommand();
         void onTextConfirmedCommand();
+        void onTextRejectedCommand();
         void onRepeatCommand();
         void onNavigateCommand(String destination);
         void onOpenMapsCommand();
@@ -438,19 +439,31 @@ final class VoiceNavigationManager implements SensorEventListener {
             return;
         }
 
-        // 5. Stop Camera / Detection
+        // 5. Stop Camera / Silence
         if (clean.equals("stop") || clean.contains("stop camera") || clean.contains("pause")
-                || clean.contains("freeze") || clean.contains("turn off camera") || clean.contains("quit detection")) {
-            listener.onStatusUpdate("✓ Command: Stop Camera");
+                || clean.contains("freeze") || clean.contains("turn off camera") || clean.contains("quit detection")
+                || clean.equals("quiet") || clean.equals("be quiet") || clean.equals("shut up")
+                || clean.equals("hush") || clean.equals("silence")) {
+            listener.onStatusUpdate("✓ Command: Stop / Silence");
             listener.onStopCommand();
             return;
         }
 
-        // 6. Confirm Read Text / OCR Reading
+        // 6. Text Rejection ("no", "don't read", "skip", "never mind")
+        if (clean.equals("no") || clean.equals("nope") || clean.contains("don't read")
+                || clean.contains("skip") || clean.contains("never mind") || clean.contains("no thanks")
+                || clean.contains("do not read")) {
+            listener.onStatusUpdate("✓ Command: Cancel Text Read");
+            listener.onTextRejectedCommand();
+            return;
+        }
+
+        // 7. Confirm Read Text / OCR Reading
         if (clean.equals("read") || clean.equals("read it") || clean.equals("read text")
-                || clean.equals("yes") || clean.equals("sure") || clean.equals("okay")
-                || clean.contains("what does it say") || clean.contains("read label")
-                || clean.contains("read sign")) {
+                || clean.equals("yes") || clean.equals("yeah") || clean.equals("yep")
+                || clean.equals("sure") || clean.equals("okay") || clean.equals("ok")
+                || clean.equals("please") || clean.equals("go ahead") || clean.contains("what does it say")
+                || clean.contains("read label") || clean.contains("read sign") || clean.contains("tell me")) {
             listener.onStatusUpdate("✓ Command: Read Text");
             listener.onTextConfirmedCommand();
             return;

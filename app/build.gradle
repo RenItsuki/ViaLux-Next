@@ -24,10 +24,13 @@ android {
         def mapsKey = localProps.getProperty('MAPS_API_KEY', '')
         manifestPlaceholders = [MAPS_API_KEY: mapsKey]
         buildConfigField "String", "MAPS_API_KEY", "\"${mapsKey}\""
+
+        def geminiKey = localProps.getProperty('GEMINI_API_KEY', '')
+        buildConfigField "String", "GEMINI_API_KEY", "\"${geminiKey}\""
     }
 
     aaptOptions {
-        noCompress "gguf", "onnx"
+        noCompress "onnx"
     }
 
     buildFeatures {
@@ -60,9 +63,7 @@ dependencies {
     implementation "com.google.android.gms:play-services-maps:19.2.0"
     implementation "com.google.android.gms:play-services-location:21.3.0"
 
-    // HTTP client for Roboflow online inference
+    // HTTP client for Gemini API and Roboflow online inference
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
-
-    // On-device LLM inference (llama.cpp wrapper for GGUF models)
-    implementation "dev.ffmpegkit-maintained:llama-android:0.1.1"
 }
+

@@ -35,6 +35,9 @@ final class AppSettings {
     // ── Voice Navigation ───────────────────────────────────────────────────
     boolean continuousVoiceEnabled; // false = push-to-talk button (reliable), true = continuous loop
 
+    // ── Gemini Voice AI ────────────────────────────────────────────────────
+    String geminiApiKey;
+
     AppSettings(Context context) {
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         load();
@@ -47,7 +50,10 @@ final class AppSettings {
         motionStreakFrames  = prefs.getInt("motionStreakFrames", 4);
         notifyAreaRatio    = prefs.getFloat("notifyAreaRatio",  0.035f);
         edgeIgnoreRatio    = prefs.getFloat("edgeIgnoreRatio",  0.18f);
-        priorityOverride   = prefs.getBoolean("priorityOverride", true);
+        geminiApiKey       = prefs.getString("geminiApiKey", BuildConfig.GEMINI_API_KEY);
+        if (geminiApiKey == null || geminiApiKey.isEmpty()) {
+            geminiApiKey = BuildConfig.GEMINI_API_KEY;
+        }
 
         onlineModeEnabled  = prefs.getBoolean("onlineModeEnabled", false);
         roboflowApiKey     = prefs.getString("roboflowApiKey",   "");
@@ -82,6 +88,7 @@ final class AppSettings {
                 .putBoolean("ocrEnabled",      ocrEnabled)
                 .putInt("ocrIntervalMs",       ocrIntervalMs)
                 .putBoolean("continuousVoiceEnabled", continuousVoiceEnabled)
+                .putString("geminiApiKey",     geminiApiKey)
                 .apply();
     }
 
@@ -99,6 +106,7 @@ final class AppSettings {
         ocrEnabled        = true;
         ocrIntervalMs     = 2500;
         continuousVoiceEnabled = false;
+        geminiApiKey      = BuildConfig.GEMINI_API_KEY;
         // Note: API keys are NOT reset to avoid losing credentials
         save();
     }

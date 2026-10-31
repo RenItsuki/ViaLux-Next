@@ -1,6 +1,8 @@
 package com.visionguide.phone;
 
 import android.graphics.Bitmap;
+import android.graphics.PointF;
+import android.graphics.Rect;
 import android.util.Log;
 
 import com.google.mlkit.vision.common.InputImage;
@@ -9,20 +11,23 @@ import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * OcrProcessor — on-device OCR using ML Kit Text Recognition v2.
- * Fully offline, no API key required.
+ * OcrProcessor — On-device OCR & Text Stability Analyzer.
  *
- * Provides:
- *   1. Automatic Scene Text Presence Detection:
- *      Periodically detects when signs, labels, or notices are in view,
- *      allowing the app to proactively ask the user:
- *      "Text detected. Would you like me to read it? Say 'read' or 'yes'."
- *   2. Spoken Text Reading:
- *      Reads the detected text aloud, concluding with:
- *      "Finished reading text."
+ * Capabilities:
+ *   1. Stationary Text Stability Detection (2-3 seconds):
+ *      When a blind user points their phone at a sign, document, or medicine box,
+ *      the camera frame and text centroid become stationary. After remaining stable
+ *      for 2.2 seconds, it triggers onStationaryTextDetected, prompting the user:
+ *      "I see text ahead. Would you like me to read it?" and listening for "Yes".
+ *   2. Active Reading & Offline Fallback:
+ *      Sorts text blocks logically from top-to-bottom, eliminating choppy fragments,
+ *      and passes high-res frames to Gemini Vision for complete reading.
  */
 final class OcrProcessor {
     private static final String TAG = "OcrProcessor";
@@ -31,17 +36,22 @@ final class OcrProcessor {
         void onResult(String text);
     }
 
-    interface TextDetectionListener {
-        void onTextDetected(String sampleWords, String fullText);
+    interface StationaryTextListener {
+        void onStationaryTextDetected(String sampleWords, String fullText, Bitmap highResFrame);
     }
 
     private final TextRecognizer recognizer;
     private final AtomicBoolean isProcessing = new AtomicBoolean(false);
     private volatile boolean armed = false;
     private String lastResult = "";
-    private String lastDetectedSignature = "";
+
+    // Text stability tracking
+    private PointF lastCentroid = null;
+    private long stationaryStartTime = 0;
+    private long lastPromptTime = 0;
+    private String lastPromptSignature = "";
     private long lastRunAt = 0;
-    private long lastPresenceCheckAt = 0;
+    private long lastCheckAt = 0;
     private int intervalMs = 2500;
 
     OcrProcessor() {
@@ -64,6 +74,7 @@ final class OcrProcessor {
 
     void cancel() {
         armed = false;
+        stationaryStartTime = 0;
     }
 
     boolean isArmed() {
@@ -71,14 +82,15 @@ final class OcrProcessor {
     }
 
     /**
-     * Periodic passive text presence check.
-     * Detects if words/signs are visible in the camera scene without blocking inference.
+     * Periodic passive text presence and stability check.
+     * When text in front of the camera remains stationary for 2.2+ seconds,
+     * triggers the listener to ask the user if they'd like it read.
      */
-    void checkTextPresence(Bitmap sourceBitmap, long now, TextDetectionListener listener) {
-        if (armed || now - lastPresenceCheckAt < 2200 || !isProcessing.compareAndSet(false, true)) {
+    void checkStationaryText(Bitmap sourceBitmap, long now, StationaryTextListener listener) {
+        if (armed || now - lastCheckAt < 450 || !isProcessing.compareAndSet(false, true)) {
             return;
         }
-        lastPresenceCheckAt = now;
+        lastCheckAt = now;
 
         if (sourceBitmap == null || sourceBitmap.isRecycled()) {
             isProcessing.set(false);
@@ -101,24 +113,63 @@ final class OcrProcessor {
         InputImage image = InputImage.fromBitmap(frameCopy, 0);
         recognizer.process(image)
                 .addOnSuccessListener(result -> {
-                    if (result.getTextBlocks().isEmpty()) return;
-                    StringBuilder sb = new StringBuilder();
-                    for (Text.TextBlock block : result.getTextBlocks()) {
-                        String bt = block.getText().trim();
-                        if (!bt.isEmpty()) {
-                            if (sb.length() > 0) sb.append(". ");
-                            sb.append(bt);
+                    List<Text.TextBlock> blocks = result.getTextBlocks();
+                    if (blocks.isEmpty()) {
+                        stationaryStartTime = 0;
+                        lastCentroid = null;
+                        return;
+                    }
+
+                    // Calculate normalized centroid of all text blocks
+                    float sumX = 0, sumY = 0;
+                    int count = 0;
+                    for (Text.TextBlock block : blocks) {
+                        Rect box = block.getBoundingBox();
+                        if (box != null) {
+                            sumX += box.centerX();
+                            sumY += box.centerY();
+                            count++;
                         }
                     }
-                    String fullText = sb.toString().trim();
-                    // Filter out short noise (< 4 chars)
-                    if (fullText.length() >= 4) {
-                        String signature = fullText.substring(0, Math.min(24, fullText.length()));
-                        if (!signature.equalsIgnoreCase(lastDetectedSignature)) {
-                            lastDetectedSignature = signature;
-                            String sample = fullText.length() > 30 ? fullText.substring(0, 30) + "..." : fullText;
-                            listener.onTextDetected(sample, fullText);
+
+                    if (count == 0) {
+                        stationaryStartTime = 0;
+                        lastCentroid = null;
+                        return;
+                    }
+
+                    float normX = sumX / (count * (float) frameCopy.getWidth());
+                    float normY = sumY / (count * (float) frameCopy.getHeight());
+
+                    if (lastCentroid != null) {
+                        float distMoved = (float) Math.hypot(normX - lastCentroid.x, normY - lastCentroid.y);
+                        // Within 8% screen delta indicates steady hand pointing at text
+                        if (distMoved < 0.08f) {
+                            if (stationaryStartTime == 0) {
+                                stationaryStartTime = now;
+                            } else if (now - stationaryStartTime >= 2200) { // Stationary for 2.2 seconds!
+                                String fullText = extractFormattedText(result);
+                                if (fullText.length() >= 5) {
+                                    String signature = fullText.substring(0, Math.min(24, fullText.length()));
+                                    if (!signature.equalsIgnoreCase(lastPromptSignature) && now - lastPromptTime > 20000) {
+                                        lastPromptSignature = signature;
+                                        lastPromptTime = now;
+                                        stationaryStartTime = 0;
+                                        String sample = fullText.length() > 30 ? fullText.substring(0, 30) + "..." : fullText;
+                                        // Pass high-res frameCopy clone to listener for Gemini Vision
+                                        Bitmap sampleFrame = frameCopy.copy(Bitmap.Config.ARGB_8888, false);
+                                        listener.onStationaryTextDetected(sample, fullText, sampleFrame);
+                                    }
+                                }
+                            }
+                        } else {
+                            // User moved camera: reset stationary timer
+                            stationaryStartTime = 0;
+                            lastCentroid = new PointF(normX, normY);
                         }
+                    } else {
+                        lastCentroid = new PointF(normX, normY);
+                        stationaryStartTime = now;
                     }
                 })
                 .addOnCompleteListener(task -> {
@@ -130,8 +181,8 @@ final class OcrProcessor {
     }
 
     /**
-     * Active OCR Read: captures and reads visible text in the scene,
-     * concluding with "Finished reading text."
+     * Active On-Device OCR Read (instant offline fallback).
+     * Sorts lines top-to-bottom so text reads in logical reading order.
      */
     void process(Bitmap sourceBitmap, long now, OcrCallback callback) {
         if (!armed) return;
@@ -160,20 +211,11 @@ final class OcrProcessor {
         InputImage image = InputImage.fromBitmap(frameCopy, 0);
         recognizer.process(image)
                 .addOnSuccessListener(result -> {
-                    String fullText = result.getText();
-                    if (fullText == null || fullText.trim().isEmpty()) {
+                    String fullText = extractFormattedText(result);
+                    if (fullText.isEmpty()) {
                         callback.onResult("No text found. Try holding phone closer to text.");
                     } else {
-                        StringBuilder sb = new StringBuilder();
-                        for (Text.TextBlock block : result.getTextBlocks()) {
-                            String blockText = block.getText().trim();
-                            if (!blockText.isEmpty()) {
-                                if (sb.length() > 0) sb.append(". ");
-                                sb.append(blockText);
-                            }
-                        }
-                        String clean = sb.toString().trim();
-                        String spokenResult = clean + ". Finished reading text.";
+                        String spokenResult = fullText + ". Finished reading text.";
                         lastResult = spokenResult;
                         callback.onResult(spokenResult);
                     }
@@ -187,6 +229,32 @@ final class OcrProcessor {
                         frameCopy.recycle();
                     }
                 });
+    }
+
+    /**
+     * Sorts text blocks vertically from top to bottom so they read naturally like a document.
+     */
+    private static String extractFormattedText(Text result) {
+        if (result == null || result.getTextBlocks().isEmpty()) return "";
+
+        List<Text.TextBlock> sortedBlocks = new ArrayList<>(result.getTextBlocks());
+        Collections.sort(sortedBlocks, (a, b) -> {
+            Rect boxA = a.getBoundingBox();
+            Rect boxB = b.getBoundingBox();
+            int topA = boxA != null ? boxA.top : 0;
+            int topB = boxB != null ? boxB.top : 0;
+            return Integer.compare(topA, topB);
+        });
+
+        StringBuilder sb = new StringBuilder();
+        for (Text.TextBlock block : sortedBlocks) {
+            String text = block.getText().trim();
+            if (!text.isEmpty()) {
+                if (sb.length() > 0) sb.append(". ");
+                sb.append(text);
+            }
+        }
+        return sb.toString().trim();
     }
 
     void shutdown() {

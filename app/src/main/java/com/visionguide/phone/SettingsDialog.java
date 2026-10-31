@@ -26,7 +26,7 @@ final class SettingsDialog {
         show(context, settings, null, changed);
     }
 
-    static void show(Context context, AppSettings settings, QwenVoiceAssistant qwenAssistant, OnSettingsChanged changed) {
+    static void show(Context context, AppSettings settings, GeminiVoiceAssistant geminiAssistant, OnSettingsChanged changed) {
         int pad = dp(context, 18);
         LinearLayout panel = new LinearLayout(context);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -133,40 +133,11 @@ final class SettingsDialog {
         ocrCheck.setChecked(settings.ocrEnabled);
         panel.addView(ocrCheck);
 
-        // ── Qwen 2.5 Voice AI (On-Device LLM) ──────────────────────────────
-        panel.addView(section(context, "Qwen 2.5 Voice AI (On-Device LLM)"));
-        panel.addView(help(context, "Qwen2.5-0.5B-Instruct GGUF via llama.cpp. Analyzes the spatial visual scene array, interprets voice queries, and tells you what to do first."));
-
-        boolean qwenLoaded = qwenAssistant != null && qwenAssistant.isModelLoaded();
-        TextView qwenStatus = label(context, "Status: " + (qwenLoaded ? "● Active (Loaded in RAM)" : "○ Ready / Not loaded in RAM"));
-        qwenStatus.setTextColor(qwenLoaded ? 0xFF00E699 : 0xFFFFB020);
-        panel.addView(qwenStatus);
-
-        if (qwenAssistant != null && !qwenLoaded) {
-            Button downloadBtn = new Button(context);
-            downloadBtn.setText("📥 Download Qwen AI Model (498 MB)");
-            downloadBtn.setTextColor(Color.WHITE);
-            downloadBtn.setBackgroundColor(0xFF143422);
-            downloadBtn.setAllCaps(false);
-            downloadBtn.setOnClickListener(v -> {
-                downloadBtn.setEnabled(false);
-                downloadBtn.setText("Connecting...");
-                qwenAssistant.downloadModel(new QwenVoiceAssistant.ModelStatusCallback() {
-                    @Override
-                    public void onStatusChanged(boolean isReady, String message) {
-                        qwenStatus.setText("Status: " + message);
-                        qwenStatus.setTextColor(isReady ? 0xFF00E699 : 0xFFFFFFFF);
-                        if (isReady) downloadBtn.setText("✓ Loaded");
-                    }
-
-                    @Override
-                    public void onDownloadProgress(int percent, String progressText) {
-                        downloadBtn.setText("Downloading: " + progressText);
-                    }
-                });
-            });
-            panel.addView(downloadBtn);
-        }
+        // ── Gemini Voice AI (Google Gemini 3.5 Flash) ──────────────────────
+        panel.addView(section(context, "Gemini Voice AI (Google Gemini 3.5 Flash)"));
+        panel.addView(help(context, "Powers intelligent conversational voice navigation, deep scene layout understanding, hazard priority reasoning, and multimodal Gemini Vision OCR."));
+        EditText geminiKeyEdit = editText(context, settings.geminiApiKey, "Gemini API Key");
+        panel.addView(geminiKeyEdit);
 
         ScrollView scroll = new ScrollView(context);
         scroll.addView(panel);
@@ -202,6 +173,8 @@ final class SettingsDialog {
                     settings.ocrEnabled = ocrCheck.isChecked();
                     // Continuous Voice
                     settings.continuousVoiceEnabled = continuousVoiceCheck.isChecked();
+                    // Gemini AI
+                    settings.geminiApiKey = geminiKeyEdit.getText().toString().trim();
                     settings.save();
                     changed.onChanged();
                 })

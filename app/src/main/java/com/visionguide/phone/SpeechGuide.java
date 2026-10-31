@@ -26,6 +26,8 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
     private OnInitListener onInitListener;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
+    private final java.util.Map<String, Runnable> pendingCallbacks = new java.util.concurrent.ConcurrentHashMap<>();
+
     SpeechGuide(Context context) {
         tts = new TextToSpeech(context.getApplicationContext(), this);
     }
@@ -66,6 +68,10 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
 
                 @Override
                 public void onDone(String utteranceId) {
+                    Runnable cb = utteranceId != null ? pendingCallbacks.remove(utteranceId) : null;
+                    if (cb != null) {
+                        mainHandler.post(cb);
+                    }
                     if (ttsStateListener != null) {
                         mainHandler.post(() -> ttsStateListener.onTtsFinished());
                     }
@@ -73,6 +79,10 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
 
                 @Override
                 public void onError(String utteranceId) {
+                    Runnable cb = utteranceId != null ? pendingCallbacks.remove(utteranceId) : null;
+                    if (cb != null) {
+                        mainHandler.post(cb);
+                    }
                     if (ttsStateListener != null) {
                         mainHandler.post(() -> ttsStateListener.onTtsFinished());
                     }
@@ -126,14 +136,24 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
 
     /** Speak immediately bypassing cooldown, used for voice commands, OCR reading, and repeating. */
     void forceSpeak(String message, boolean flush) {
+        forceSpeak(message, flush, null);
+    }
+
+    /** Speak immediately and execute callback when speech completes. */
+    void forceSpeak(String message, boolean flush, Runnable onDone) {
         String clean = cleanForSpeech(message);
         if (!ready || tts == null || clean.isEmpty()) {
+            if (onDone != null) mainHandler.post(onDone);
             return;
         }
         lastMessage = clean;
         lastStartedAt = System.currentTimeMillis();
+        String utteranceId = "via-lux-force-" + System.nanoTime();
+        if (onDone != null) {
+            pendingCallbacks.put(utteranceId, onDone);
+        }
         int mode = flush ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
-        tts.speak(clean, mode, null, "via-lux-force-" + System.nanoTime());
+        tts.speak(clean, mode, null, utteranceId);
     }
 
     void stopSpeaking() {

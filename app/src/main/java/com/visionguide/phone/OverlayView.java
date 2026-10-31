@@ -9,8 +9,10 @@ import android.util.AttributeSet;
 import android.view.View;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 public final class OverlayView extends View {
     private final Paint gridPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -82,7 +84,20 @@ public final class OverlayView extends View {
 
         float scaleX = w / imageWidth;
         float scaleY = h / imageHeight;
+
+        Map<String, Integer> labelCounts = new HashMap<>();
+        for (Detection d : detections) {
+            String l = d.label.toLowerCase(Locale.US);
+            labelCounts.put(l, labelCounts.getOrDefault(l, 0) + 1);
+        }
+        Map<String, Integer> labelInstanceIdx = new HashMap<>();
+
         for (Detection detection : detections) {
+            String l = detection.label.toLowerCase(Locale.US);
+            int total = labelCounts.getOrDefault(l, 1);
+            int idx = labelInstanceIdx.getOrDefault(l, 0) + 1;
+            labelInstanceIdx.put(l, idx);
+
             boolean moving = guidanceEngine != null && guidanceEngine.isMoving(detection, imageWidth, imageHeight);
             boolean isHazard = GuidanceEngine.isHazardLabel(detection.label);
             Paint boxPaint = isHazard ? hazardPaint : (moving ? movingPaint : stillPaint);
@@ -95,13 +110,14 @@ public final class OverlayView extends View {
             canvas.drawRect(mapped, boxPaint);
             String cell = GuidanceEngine.gridCellFor(detection, imageWidth, imageHeight);
             String prefix = isHazard ? "⚠️ " : "";
+            String instanceTag = (total > 1) ? (" #" + idx) : "";
             String distText = "";
             if (depthEstimator != null) {
                 float distM = depthEstimator.estimateDistanceMeters(detection, imageWidth, imageHeight);
                 distText = String.format(Locale.US, " · %.1fm", distM);
             }
-            String text = String.format(Locale.US, "%s%s%s | %s",
-                    prefix, detection.label, distText, cell);
+            String text = String.format(Locale.US, "%s%s%s%s | %s",
+                    prefix, detection.label, instanceTag, distText, cell);
             canvas.drawText(text, mapped.left, Math.max(42f, mapped.top - 10f), textPaint);
         }
     }

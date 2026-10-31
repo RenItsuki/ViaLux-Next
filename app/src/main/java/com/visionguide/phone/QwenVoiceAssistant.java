@@ -220,9 +220,10 @@ final class QwenVoiceAssistant {
                         "1. Speak naturally, warmly, and concisely in simple conversational English. " +
                         "2. Never use bullet points, markdown, asterisks, numbered lists, emojis, or computer jargon. " +
                         "3. Understand room layouts and surroundings: if indoor furniture or objects are present, identify whether we are indoors (e.g. dining room, office, living room, bedroom, kitchen) or outdoors along a street/sidewalk, and explain the walking layout. " +
-                        "4. First priority is safety: if anything is blocking their walking path or approaching within 3 meters, warn them immediately and tell them exactly what to do first. " +
-                        "5. If the path ahead is clear, reassure them that it's safe to walk forward. " +
-                        "6. Keep your response short: exactly 1 or 2 spoken sentences so the user is not overwhelmed.";
+                        "4. When multiple objects of the same kind are present (like multiple chairs, cars, or people), group them together and state the count (e.g. 'There are 3 chairs ahead') rather than reciting them one by one. Refer to them as Chair 1, Chair 2, etc. if distinguishing them. " +
+                        "5. Safety and conflict avoidance: if both left and right sides are blocked by obstacles or hazards (such as a car on the right and an obstacle on the left), instruct the user to STOP immediately and turn slowly to scan for a safe way out. " +
+                        "6. If the path ahead is clear, reassure them that it's safe to walk forward. " +
+                        "7. Keep your response short: exactly 1 or 2 spoken sentences so the user is not overwhelmed.";
 
                 StringBuilder promptBuilder = new StringBuilder();
                 promptBuilder.append("User asks: \"").append(userQuery.trim()).append("\"\n\n");
@@ -340,6 +341,15 @@ final class QwenVoiceAssistant {
         sb.append("Detected Environment: ").append(layoutInfo.environmentSummary).append("\n");
         sb.append("Room / Area Layout: ").append(layoutInfo.layoutSummary).append("\n");
         sb.append("Recommended Walking Corridor: ").append(layoutInfo.recommendedCorridor).append(" corridor\n\n");
+
+        if (guidanceEngine != null && guidanceEngine.getInstanceTracker() != null) {
+            String aggregated = guidanceEngine.getInstanceTracker().buildAggregatedDescription(
+                    detections, depthEstimator, imgWidth, imgHeight);
+            if (!aggregated.isEmpty()) {
+                sb.append("Multi-Instance Summary: ").append(aggregated).append("\n\n");
+            }
+        }
+
         sb.append("Objects in camera view:\n");
 
         int count = 0;

@@ -113,7 +113,7 @@ final class SceneVoiceAssistant {
                 || q.contains("what's ahead") || q.contains("what is ahead")
                 || q.contains("what do you see") || q.contains("describe")
                 || q.contains("around me") || q.contains("surroundings")) {
-            return describeFrontScene(active, depthEstimator, imgWidth, imgHeight);
+            return describeFrontScene(active, depthEstimator, guidanceEngine, imgWidth, imgHeight);
         }
 
         // ── 3. Moving Object Query ────────────────────────────────────────────
@@ -141,7 +141,7 @@ final class SceneVoiceAssistant {
         if (active.isEmpty()) {
             return "The path directly ahead is open and clear. It is safe to walk forward.";
         }
-        return describeFrontScene(active, depthEstimator, imgWidth, imgHeight);
+        return describeFrontScene(active, depthEstimator, guidanceEngine, imgWidth, imgHeight);
     }
 
     // ── Semantic Query Handlers ──────────────────────────────────────────────
@@ -252,7 +252,25 @@ final class SceneVoiceAssistant {
             }
         }
 
-        // 2. Immediate obstacle in center walking path (with corridor guidance)
+        // 2. Check for multi-obstacle conflict (e.g. car on right, hole/obstacle on left)
+        Detection leftObstacle = null;
+        Detection rightObstacle = null;
+        for (Detection d : detections) {
+            String region = GuidanceEngine.regionFor(d, imgWidth);
+            float dist = depthEstimator != null ? depthEstimator.estimateDistanceMeters(d, imgWidth, imgHeight) : 3.0f;
+            if (dist < 3.2f) {
+                if (region.equals("left") && leftObstacle == null) leftObstacle = d;
+                else if (region.equals("right") && rightObstacle == null) rightObstacle = d;
+            }
+        }
+
+        if (layoutInfo.centerBlocked && leftObstacle != null && rightObstacle != null) {
+            return "Stop right now! Both sides are blocked: a " + rightObstacle.label + " on your right, a "
+                    + leftObstacle.label + " on your left, and " + layoutInfo.primaryCenterObstacle.label
+                    + " directly ahead. Turn slowly to your left or right with your phone to scan for an open exit.";
+        }
+
+        // 3. Immediate obstacle in center walking path (with corridor guidance)
         if (layoutInfo.centerBlocked && layoutInfo.primaryCenterObstacle != null) {
             String distStr = String.format(Locale.US, "%.1f", layoutInfo.centerObstacleDistance);
             if (layoutInfo.centerObstacleDistance < 1.4f) {
@@ -265,7 +283,7 @@ final class SceneVoiceAssistant {
             }
         }
 
-        // 3. Clear path forward with side awareness
+        // 4. Clear path forward with side awareness
         Detection closest = findClosest(detections, depthEstimator, imgWidth, imgHeight);
         float sideDist = depthEstimator.estimateDistanceMeters(closest, imgWidth, imgHeight);
         String sideRegion = GuidanceEngine.regionFor(closest, imgWidth);
@@ -277,6 +295,7 @@ final class SceneVoiceAssistant {
     private static String describeFrontScene(
             List<Detection> detections,
             DualCameraDepthEstimator depthEstimator,
+            GuidanceEngine guidanceEngine,
             int imgWidth,
             int imgHeight) {
 
@@ -285,9 +304,20 @@ final class SceneVoiceAssistant {
         }
 
         SceneLayoutAnalyzer.LayoutInfo layoutInfo = SceneLayoutAnalyzer.analyze(detections, depthEstimator, imgWidth, imgHeight);
-        StringBuilder sb = new StringBuilder();
 
-        // Lead with environmental understanding (e.g. "We are indoors, in what appears to be a dining room.")
+        // Multi-instance aggregation: "There are 3 chairs ahead: Chair 1 is centered..."
+        if (guidanceEngine != null && guidanceEngine.getInstanceTracker() != null) {
+            String aggregated = guidanceEngine.getInstanceTracker().buildAggregatedDescription(
+                    detections, depthEstimator, imgWidth, imgHeight);
+            if (!aggregated.isEmpty()) {
+                if (layoutInfo.environment != SceneLayoutAnalyzer.EnvironmentType.UNKNOWN) {
+                    return layoutInfo.environmentSummary + " " + aggregated;
+                }
+                return aggregated;
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
         if (layoutInfo.environment != SceneLayoutAnalyzer.EnvironmentType.UNKNOWN) {
             sb.append(layoutInfo.environmentSummary).append(" ");
         }

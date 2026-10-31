@@ -23,6 +23,7 @@ final class GuidanceEngine {
 
     private final Map<String, TrackMemory> tracks = new HashMap<>();
     private final Map<String, SpokenState> spokenStates = new HashMap<>();
+    private final InstanceTracker instanceTracker = new InstanceTracker();
     private long lastClear = 0;
     private long lastSpeechAt = 0;
     private int lastSpeechPriority = 0;
@@ -30,9 +31,14 @@ final class GuidanceEngine {
     void reset() {
         tracks.clear();
         spokenStates.clear();
+        instanceTracker.reset();
         lastClear = 0;
         lastSpeechAt = 0;
         lastSpeechPriority = 0;
+    }
+
+    InstanceTracker getInstanceTracker() {
+        return instanceTracker;
     }
 
     Guidance evaluate(List<Detection> detections, int width, int height, long now, AppSettings settings) {
@@ -40,6 +46,22 @@ final class GuidanceEngine {
     }
 
     Guidance evaluate(List<Detection> detections, int width, int height, long now, AppSettings settings, DualCameraDepthEstimator depthEstimator) {
+        instanceTracker.update(detections, depthEstimator, width, height, now);
+
+        // 1. Check for multi-obstacle conflict (e.g. car on right, hole/obstacle on left)
+        String conflictMsg = instanceTracker.evaluateMultiObstacleConflict(detections, depthEstimator, width, height, now);
+        if (conflictMsg != null) {
+            return maybeSpeak(new Guidance(conflictMsg, true, null, false, Guidance.PRIORITY_URGENT),
+                    "conflict", "conflict", now, settings);
+        }
+
+        // 2. Check if a tracked instance has exited the frame (delta-only update)
+        String exitMsg = instanceTracker.checkExitedInstances(now);
+        if (exitMsg != null) {
+            return maybeSpeak(new Guidance(exitMsg, false, null, false, Guidance.PRIORITY_INFO),
+                    "exit:" + exitMsg, "exit", now, settings);
+        }
+
         updateTracks(detections, width, height, now, settings);
         Detection candidate = bestDetection(detections, width, height, settings);
         if (candidate == null) {
@@ -72,12 +94,32 @@ final class GuidanceEngine {
 
         expire(now);
         int priority = priorityFor(candidate, moving, emergency, areaRatio);
-        String message = messageFor(candidate, region, cell, distance, detections, width, height, emergency, moving, settings);
+
+        // 3. Multi-object aggregation check: If multiple objects of same kind are visible
+        int sameKindCount = countLabel(detections, candidate.label);
+        String message;
+        if (sameKindCount > 1) {
+            String pluralLabel = InstanceTracker.pluralize(sameKindCount, candidate.label);
+            String direction = suggestDirection(candidate, detections, width, height, distance, settings);
+            message = "There are " + pluralLabel + " ahead: closest is " + (region.equals("center") ? "directly ahead" : "to your " + region) + ", " + distance + ". " + direction;
+        } else {
+            message = messageFor(candidate, region, cell, distance, detections, width, height, emergency, moving, settings);
+        }
+
         Guidance guidance = new Guidance(message, emergency, candidate, moving, priority);
         String stateSignature = stateSignature(region, distance, emergency);
         Guidance spoken = maybeSpeak(guidance, candidate.label.toLowerCase(Locale.US), stateSignature, now, settings);
         if (spoken != null) memory.lastAnnounced = now;
         return spoken;
+    }
+
+    private static int countLabel(List<Detection> detections, String label) {
+        int count = 0;
+        String l = label.toLowerCase(Locale.US);
+        for (Detection d : detections) {
+            if (d.label.equalsIgnoreCase(l)) count++;
+        }
+        return count;
     }
 
     boolean isMoving(Detection detection, int width, int height) {
@@ -273,11 +315,11 @@ final class GuidanceEngine {
         String region = regionFor(candidate, width);
         boolean leftBlocked  = blocked(detections, candidate, "left",  width, height);
         boolean rightBlocked = blocked(detections, candidate, "right", width, height);
-        if (region.equals("left"))  return "Guide slightly right.";
-        if (region.equals("right")) return "Guide slightly left.";
-        if (leftBlocked && rightBlocked) return "Path narrow ahead.";
+        if (leftBlocked && rightBlocked) return "Stop. Both sides are blocked; turn slowly to scan for a safe exit.";
         if (leftBlocked)  return "Guide right.";
         if (rightBlocked) return "Guide left.";
+        if (region.equals("left"))  return "Guide slightly right.";
+        if (region.equals("right")) return "Guide slightly left.";
         return "Guide right.";
     }
 

@@ -1,0 +1,21 @@
+# Android build output
+build/
+app/build/
+.gradle/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+
+# Keystore / signing
+*.jks
+*.keystore
+
+# Generated
+captures/
+.externalNativeBuild/
+.cxx/

@@ -1,0 +1,69 @@
+package com.visionguide.phone;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+
+final class AppSettings {
+    private static final String PREFS = "via_lux_settings";
+
+    private final SharedPreferences prefs;
+
+    int speechDelayMs;
+    int repeatCooldownMs;
+    float motionThreshold;
+    int motionStreakFrames;
+    float notifyAreaRatio;
+    float edgeIgnoreRatio;
+    boolean priorityOverride;
+
+    AppSettings(Context context) {
+        prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        load();
+    }
+
+    void load() {
+        speechDelayMs = prefs.getInt("speechDelayMs", 2000);
+        repeatCooldownMs = prefs.getInt("repeatCooldownMs", 10000);
+        motionThreshold = prefs.getFloat("motionThreshold", 0.040f);
+        motionStreakFrames = prefs.getInt("motionStreakFrames", 3);
+        notifyAreaRatio = prefs.getFloat("notifyAreaRatio", 0.035f);
+        edgeIgnoreRatio = prefs.getFloat("edgeIgnoreRatio", 0.18f);
+        priorityOverride = prefs.getBoolean("priorityOverride", true);
+    }
+
+    void save() {
+        prefs.edit()
+                .putInt("speechDelayMs", speechDelayMs)
+                .putInt("repeatCooldownMs", repeatCooldownMs)
+                .putFloat("motionThreshold", motionThreshold)
+                .putInt("motionStreakFrames", motionStreakFrames)
+                .putFloat("notifyAreaRatio", notifyAreaRatio)
+                .putFloat("edgeIgnoreRatio", edgeIgnoreRatio)
+                .putBoolean("priorityOverride", priorityOverride)
+                .apply();
+    }
+
+    void resetDefaults() {
+        speechDelayMs = 2000;
+        repeatCooldownMs = 10000;
+        motionThreshold = 0.040f;
+        motionStreakFrames = 3;
+        notifyAreaRatio = 0.035f;
+        edgeIgnoreRatio = 0.18f;
+        priorityOverride = true;
+        save();
+    }
+
+    String notifyDistanceLabel() {
+        if (notifyAreaRatio >= 0.25f) return "Very close only";
+        if (notifyAreaRatio >= 0.10f) return "Close or nearer";
+        if (notifyAreaRatio >= 0.035f) return "Medium or nearer";
+        return "Far or nearer";
+    }
+
+    String motionLabel() {
+        if (motionThreshold >= 0.055f) return "Strong motion only";
+        if (motionThreshold <= 0.025f) return "Sensitive";
+        return "Balanced";
+    }
+}

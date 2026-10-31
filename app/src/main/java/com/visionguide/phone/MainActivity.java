@@ -133,22 +133,49 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         vibrator        = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
 
+        speechGuide.setTtsStateListener(new SpeechGuide.TtsStateListener() {
+            @Override
+            public void onTtsStarted() {
+                voiceNav.setTtsSpeaking(true);
+            }
+
+            @Override
+            public void onTtsFinished() {
+                voiceNav.setTtsSpeaking(false);
+            }
+        });
+
         buildUi();
         loadDetectors();
         handleNfcIntent(getIntent());
+
+        // Check audio & camera permissions for zero-contact experience
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{
+                    Manifest.permission.RECORD_AUDIO,
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+            }, REQ_AUDIO);
+        } else {
+            voiceNav.setContinuousEnabled(true);
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         if (settings.nfcEnabled) nfcReader.enable(this);
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            voiceNav.setContinuousEnabled(true);
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         nfcReader.disable(this);
-        voiceNav.stopListening();
+        voiceNav.setContinuousEnabled(false);
     }
 
     @Override
@@ -176,14 +203,13 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] grants) {
         super.onRequestPermissionsResult(code, perms, grants);
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            voiceNav.setContinuousEnabled(true);
+        }
         if (code == REQ_CAMERA && grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) {
             startDetection();
         } else if (code == REQ_LOCATION && grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) {
             showDestinationDialog();
-        } else if (code == REQ_AUDIO && grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) {
-            triggerVoiceListening();
-        } else {
-            Toast.makeText(this, "Permission required for this feature.", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -247,7 +273,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
         // Voice Feedback Status Line
         voiceStatusText = new TextView(this);
-        voiceStatusText.setText("🎙️ Voice Active: Say 'Start', 'Read text', or 'Navigate to...'");
+        voiceStatusText.setText("🎙️ Hands-Free Voice Active: Speak anytime without touching phone");
         voiceStatusText.setTextColor(0xFF00E699);
         voiceStatusText.setTextSize(13f);
         voiceStatusText.setGravity(Gravity.CENTER);
@@ -255,13 +281,13 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
         // Voice Mic Primary Action Button
         voiceMicButton = new Button(this);
-        voiceMicButton.setText("🎙️  Speak Voice Command");
+        voiceMicButton.setText("🎙️  Hands-Free Voice Control Active");
         voiceMicButton.setTextColor(Color.BLACK);
-        voiceMicButton.setTextSize(17f);
+        voiceMicButton.setTextSize(16f);
         voiceMicButton.setTypeface(Typeface.DEFAULT_BOLD);
         voiceMicButton.setAllCaps(false);
         voiceMicButton.setBackground(card(0xFF00E699, dp(22), 0xFFFFFFFF));
-        voiceMicButton.setOnClickListener(v -> triggerVoiceListening());
+        voiceMicButton.setOnClickListener(v -> onHelpCommand());
 
         // Row 1: Start/Stop Camera + Read Text
         LinearLayout row1 = new LinearLayout(this);
@@ -468,10 +494,10 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     public void onListeningStateChanged(boolean isListening) {
         runOnUiThread(() -> {
             if (isListening) {
-                voiceMicButton.setText("🔴 Listening... Speak Now");
+                voiceMicButton.setText("🔴 Hands-Free Listening (Speak Command)");
                 voiceMicButton.setBackground(card(0xFFFF4B4B, dp(22), Color.WHITE));
             } else {
-                voiceMicButton.setText("🎙️  Speak Voice Command");
+                voiceMicButton.setText("🎙️  Hands-Free Voice Control Active");
                 voiceMicButton.setBackground(card(0xFF00E699, dp(22), Color.WHITE));
             }
         });

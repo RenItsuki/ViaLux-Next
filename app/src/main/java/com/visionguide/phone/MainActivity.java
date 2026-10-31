@@ -92,6 +92,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private MedicineStore medicineStore;
     private VoiceNavigationManager voiceNav;
     private Vibrator vibrator;
+    private QwenVoiceAssistant qwenAssistant;
 
     private ProcessCameraProvider cameraProvider;
     private ExecutorService cameraExecutor;
@@ -151,6 +152,25 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         voiceNav        = new VoiceNavigationManager(this, this);
         vibrator        = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        qwenAssistant   = new QwenVoiceAssistant(this);
+
+        qwenAssistant.loadModelAsync(new QwenVoiceAssistant.ModelStatusCallback() {
+            @Override
+            public void onStatusChanged(boolean isReady, String message) {
+                runOnUiThread(() -> {
+                    if (isReady) {
+                        statusPill.setText("🧠 Qwen AI");
+                        statusPill.setTextColor(0xFF00E699);
+                        voiceStatusText.setText("🧠 Qwen 2.5 Voice AI ready! Ask 'What should I do first?'");
+                    }
+                });
+            }
+
+            @Override
+            public void onDownloadProgress(int percent, String progressText) {
+                runOnUiThread(() -> voiceStatusText.setText("📥 Downloading Qwen AI: " + progressText));
+            }
+        });
 
         speechGuide.setTtsStateListener(new SpeechGuide.TtsStateListener() {
             @Override
@@ -214,6 +234,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         if (ocrProcessor    != null) ocrProcessor.shutdown();
         if (navigationGuide != null) navigationGuide.stop();
         if (voiceNav        != null) voiceNav.shutdown();
+        if (qwenAssistant   != null) qwenAssistant.shutdown();
         if (cameraExecutor  != null) cameraExecutor.shutdownNow();
         if (onlineExecutor  != null) onlineExecutor.shutdownNow();
         if (detector        != null) { try { detector.close(); } catch (Exception ignored) {} }
@@ -392,7 +413,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         helpBtn.setOnClickListener(v -> onHelpCommand());
 
         settingsButton = button("⚙️ Settings", 0xFF1C222C, 0xFF8A9BA8);
-        settingsButton.setOnClickListener(v -> SettingsDialog.show(this, settings, () -> {
+        settingsButton.setOnClickListener(v -> SettingsDialog.show(this, settings, qwenAssistant, () -> {
             settings.load();
             guidanceEngine.reset();
             ocrProcessor.setIntervalMs(settings.ocrIntervalMs);
@@ -498,19 +519,50 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     public void onSceneAssistantQuery(String question) {
         runOnUiThread(() -> {
             vibrate();
-            // Query the current visual scene memory
-            String answer = SceneVoiceAssistant.answerQuery(
-                    question,
-                    currentDetections,
-                    depthEstimator,
-                    guidanceEngine,
-                    currentImageWidth,
-                    currentImageHeight,
-                    ocrProcessor.repeat()
-            );
-            guidanceText.setText(answer);
-            speechGuide.forceSpeak(answer, true);
-            voiceStatusText.setText("💬 " + question);
+            voiceStatusText.setText("🧠 Analyzing scene...");
+            String navInst = navigationGuide.isActive() ? guidanceText.getText().toString() : "";
+            if (qwenAssistant != null) {
+                qwenAssistant.answerQuery(
+                        question,
+                        currentDetections,
+                        depthEstimator,
+                        guidanceEngine,
+                        currentImageWidth,
+                        currentImageHeight,
+                        ocrProcessor.repeat(),
+                        navInst,
+                        (speechAnswer, actionIntent, destinationParam) -> {
+                            guidanceText.setText(speechAnswer);
+                            speechGuide.forceSpeak(speechAnswer, true);
+                            voiceStatusText.setText("💬 " + question);
+
+                            if ("NAVIGATE".equals(actionIntent) && destinationParam != null && !destinationParam.isEmpty()) {
+                                requestLocationThenNavigate(destinationParam);
+                            } else if ("START_CAMERA".equals(actionIntent)) {
+                                if (!running) startDetection();
+                            } else if ("STOP_CAMERA".equals(actionIntent)) {
+                                if (running) stopDetection();
+                            } else if ("READ_TEXT".equals(actionIntent)) {
+                                triggerOcrRead();
+                            } else if ("CHECK_NFC".equals(actionIntent)) {
+                                onCheckNfcCommand();
+                            }
+                        }
+                );
+            } else {
+                String answer = SceneVoiceAssistant.answerQuery(
+                        question,
+                        currentDetections,
+                        depthEstimator,
+                        guidanceEngine,
+                        currentImageWidth,
+                        currentImageHeight,
+                        ocrProcessor.repeat()
+                );
+                guidanceText.setText(answer);
+                speechGuide.forceSpeak(answer, true);
+                voiceStatusText.setText("💬 " + question);
+            }
         });
     }
 

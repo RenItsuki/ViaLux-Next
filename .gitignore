@@ -19,3 +19,7 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+
+# Large model files (GGUF, weights)
+*.gguf
+*.bin

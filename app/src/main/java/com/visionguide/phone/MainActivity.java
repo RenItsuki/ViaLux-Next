@@ -65,6 +65,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private Button startStopButton;
     private Button ocrButton;
     private Button navButton;
+    private Button openMapsButton;
     private Button repeatButton;
     private Button settingsButton;
     private Button nfcButton;
@@ -96,6 +97,12 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private long lastAnalysisTime = 0;
     private long lastOnlineTime   = 0;
     private boolean running = false;
+    private boolean hasSpokenWelcome = false;
+
+    // Text presence asking state
+    private String pendingDetectedText = null;
+    private long lastTextAskAt = 0;
+    private boolean textConfirmationActive = false;
 
     private volatile List<Detection> latestOnlineDetections = Collections.emptyList();
 
@@ -145,11 +152,13 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             }
         });
 
+        speechGuide.setOnInitListener(this::speakWelcomeOptions);
+
         buildUi();
         loadDetectors();
         handleNfcIntent(getIntent());
 
-        // Check audio & camera permissions for zero-contact experience
+        // Check audio & camera permissions for hands-free zero-contact experience
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
                 || checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{
@@ -205,6 +214,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         super.onRequestPermissionsResult(code, perms, grants);
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             voiceNav.setContinuousEnabled(true);
+            voiceNav.startListening();
         }
         if (code == REQ_CAMERA && grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) {
             startDetection();
@@ -214,12 +224,25 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // Welcome Voice Options on App Open
+    // ─────────────────────────────────────────────────────────────────────
+
+    private void speakWelcomeOptions() {
+        if (hasSpokenWelcome) return;
+        hasSpokenWelcome = true;
+        mainHandler.postDelayed(() -> {
+            String welcome = "Welcome to Via Lux. You can say: 'Start camera' for obstacle detection, 'Take me to' followed by a destination to navigate, 'Read text' to read signs, or 'Check NFC' for medicine. Say 'Start' anytime to begin.";
+            speechGuide.forceSpeak(welcome, true);
+        }, 600);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // Modern High-Contrast Accessible UI Construction
     // ─────────────────────────────────────────────────────────────────────
 
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Color.rgb(9, 13, 20));
+        root.setBackgroundColor(Color.rgb(8, 12, 18));
 
         // Camera preview & overlay
         previewView = new PreviewView(this);
@@ -230,15 +253,15 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         // Main chrome container (bottom sheet)
         LinearLayout chrome = new LinearLayout(this);
         chrome.setOrientation(LinearLayout.VERTICAL);
-        chrome.setPadding(dp(16), dp(16), dp(16), dp(20));
+        chrome.setPadding(dp(16), dp(14), dp(16), dp(18));
         chrome.setGravity(Gravity.CENTER_HORIZONTAL);
-        chrome.setBackground(card(0xF00E1724, dp(28), 0x3337D4A7));
+        chrome.setBackground(card(0xF20B1320, dp(26), 0x3337D4A7));
 
         // Header: App title + Status Badge
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(0, 0, 0, dp(8));
+        header.setPadding(0, 0, 0, dp(6));
 
         TextView title = new TextView(this);
         title.setText("Via Lux");
@@ -248,11 +271,11 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
         statusPill = new TextView(this);
         statusPill.setText("● Ready");
-        statusPill.setTextColor(0xFF37D4A7);
+        statusPill.setTextColor(0xFF00E699);
         statusPill.setTextSize(13f);
         statusPill.setTypeface(Typeface.DEFAULT_BOLD);
         statusPill.setPadding(dp(12), dp(4), dp(12), dp(4));
-        statusPill.setBackground(card(0x3337D4A7, dp(14), 0x6637D4A7));
+        statusPill.setBackground(card(0x2E00E699, dp(14), 0x8800E699));
 
         LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -261,81 +284,87 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         header.addView(title);
         header.addView(statusPill, pillParams);
 
-        // Prominent Spoken Guidance Card
+        // Prominent Spoken Guidance Card (Giant touch target)
         guidanceText = new TextView(this);
-        guidanceText.setText("Tap Start or say 'Start camera' to begin.");
+        guidanceText.setText("Tap Start or say 'Start camera' to begin.\nSay 'Take me to [place]' to navigate.");
         guidanceText.setTextColor(Color.WHITE);
-        guidanceText.setTextSize(21f);
+        guidanceText.setTextSize(20f);
         guidanceText.setTypeface(Typeface.DEFAULT_BOLD);
         guidanceText.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         guidanceText.setPadding(dp(18), dp(16), dp(18), dp(16));
-        guidanceText.setBackground(card(0xCC132030, dp(18), 0x8837D4A7));
+        guidanceText.setBackground(card(0xCC111C28, dp(18), 0x8837D4A7));
+        guidanceText.setOnClickListener(v -> onGuidanceCardTapped());
 
         // Voice Feedback Status Line
         voiceStatusText = new TextView(this);
-        voiceStatusText.setText("🎙️ Hands-Free Voice Active: Speak anytime without touching phone");
+        voiceStatusText.setText("🎙️ Listening... (Say 'Start', 'Take me to...', 'Read text', or 'Help')");
         voiceStatusText.setTextColor(0xFF00E699);
         voiceStatusText.setTextSize(13f);
         voiceStatusText.setGravity(Gravity.CENTER);
-        voiceStatusText.setPadding(0, dp(8), 0, dp(8));
+        voiceStatusText.setPadding(0, dp(6), 0, dp(6));
 
         // Voice Mic Primary Action Button
         voiceMicButton = new Button(this);
-        voiceMicButton.setText("🎙️  Hands-Free Voice Control Active");
+        voiceMicButton.setText("🎙️  Tap Anywhere to Speak Command");
         voiceMicButton.setTextColor(Color.BLACK);
-        voiceMicButton.setTextSize(16f);
+        voiceMicButton.setTextSize(15f);
         voiceMicButton.setTypeface(Typeface.DEFAULT_BOLD);
         voiceMicButton.setAllCaps(false);
-        voiceMicButton.setBackground(card(0xFF00E699, dp(22), 0xFFFFFFFF));
-        voiceMicButton.setOnClickListener(v -> onHelpCommand());
+        voiceMicButton.setBackground(card(0xFF00E699, dp(20), Color.WHITE));
+        voiceMicButton.setOnClickListener(v -> triggerVoiceListening());
+
+        // Open in Google Maps action button (appears during navigation)
+        openMapsButton = button("🗺️ Open in Google Maps (Walking)", 0xFF142B44, 0xFF4285F4);
+        openMapsButton.setVisibility(View.GONE);
+        openMapsButton.setOnClickListener(v -> onOpenMapsCommand());
 
         // Row 1: Start/Stop Camera + Read Text
         LinearLayout row1 = new LinearLayout(this);
         row1.setOrientation(LinearLayout.HORIZONTAL);
         row1.setGravity(Gravity.CENTER);
 
-        startStopButton = button("▶ Start Camera", 0xFF1B3B2B, 0xFF00E699);
+        startStopButton = button("▶ Start Camera", 0xFF183828, 0xFF00E699);
         startStopButton.setOnClickListener(v -> toggleCameraDetection());
 
-        ocrButton = button("📖 Read Text", 0xFF143048, 0xFF00D2FF);
+        ocrButton = button("📖 Read Text", 0xFF103046, 0xFF00D2FF);
         ocrButton.setOnClickListener(v -> triggerOcrRead());
 
         row1.addView(startStopButton, buttonParams());
         row1.addView(ocrButton, buttonParams());
 
-        // Row 2: Navigate + Repeat
+        // Row 2: Navigate / Take Me To + Check NFC
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
         row2.setGravity(Gravity.CENTER);
 
-        navButton = button("🧭 Navigate", 0xFF1E284A, 0xFF5B8DEF);
+        navButton = button("🧭 Take Me To", 0xFF1A2648, 0xFF5B8DEF);
         navButton.setOnClickListener(v -> {
             if (navigationGuide.isActive()) {
                 navigationGuide.stop();
-                navButton.setText("🧭 Navigate");
-                statusPill.setText("● Camera Active");
+                navButton.setText("🧭 Take Me To");
+                openMapsButton.setVisibility(View.GONE);
+                statusPill.setText("● Active");
                 speechGuide.forceSpeak("Navigation stopped.", true);
             } else {
                 showDestinationDialog();
             }
         });
 
-        repeatButton = button("🔁 Repeat", 0xFF3D2E14, 0xFFFFB300);
-        repeatButton.setOnClickListener(v -> onRepeatCommand());
+        nfcButton = button("🏷️ Check NFC", 0xFF2A1C3C, 0xFFC084FC);
+        nfcButton.setOnClickListener(v -> onCheckNfcCommand());
 
         row2.addView(navButton, buttonParams());
-        row2.addView(repeatButton, buttonParams());
+        row2.addView(nfcButton, buttonParams());
 
-        // Row 3: NFC Tags + Settings
+        // Row 3: Repeat + Settings
         LinearLayout row3 = new LinearLayout(this);
         row3.setOrientation(LinearLayout.HORIZONTAL);
         row3.setGravity(Gravity.CENTER);
 
-        nfcButton = button("🏷️ NFC Tags", 0xFF2A2038, 0xFFC084FC);
-        nfcButton.setOnClickListener(v ->
-                startActivity(new Intent(this, MedicineRegisterActivity.class)));
+        repeatButton = button("🔁 Repeat", 0xFF362812, 0xFFFFB300);
+        repeatButton.setOnClickListener(v -> onRepeatCommand());
 
-        settingsButton = button("⚙️ Settings", 0xFF202630, 0xFF9FB0C3);
+        settingsButton = button("⚙️ Settings", 0xFF1C222C, 0xFF9FB0C3);
         settingsButton.setOnClickListener(v -> SettingsDialog.show(this, settings, () -> {
             settings.load();
             guidanceEngine.reset();
@@ -344,7 +373,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             Toast.makeText(this, "Settings saved.", Toast.LENGTH_SHORT).show();
         }));
 
-        row3.addView(nfcButton, buttonParams());
+        row3.addView(repeatButton, buttonParams());
         row3.addView(settingsButton, buttonParams());
 
         // Status Summary Footer
@@ -353,7 +382,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         settingsSummary.setTextColor(0xFF8A9BA8);
         settingsSummary.setTextSize(12f);
         settingsSummary.setGravity(Gravity.CENTER);
-        settingsSummary.setPadding(0, dp(8), 0, 0);
+        settingsSummary.setPadding(0, dp(6), 0, 0);
 
         loadingText = new TextView(this);
         loadingText.setText("Opening camera feed...");
@@ -366,12 +395,13 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         // Layout Assembly
         LinearLayout.LayoutParams fullWidth = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        fullWidth.setMargins(0, dp(4), 0, dp(4));
+        fullWidth.setMargins(0, dp(3), 0, dp(3));
 
         chrome.addView(header, fullWidth);
         chrome.addView(guidanceText, fullWidth);
         chrome.addView(voiceStatusText, fullWidth);
         chrome.addView(voiceMicButton, fullWidth);
+        chrome.addView(openMapsButton, fullWidth);
         chrome.addView(row1, fullWidth);
         chrome.addView(row2, fullWidth);
         chrome.addView(row3, fullWidth);
@@ -389,6 +419,15 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         root.addView(chrome, guideParams);
 
         setContentView(root);
+    }
+
+    private void onGuidanceCardTapped() {
+        vibrate();
+        if (textConfirmationActive && pendingDetectedText != null) {
+            onTextConfirmedCommand();
+        } else {
+            triggerVoiceListening();
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -427,6 +466,22 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     }
 
     @Override
+    public void onTextConfirmedCommand() {
+        runOnUiThread(() -> {
+            vibrate();
+            if (pendingDetectedText != null && !pendingDetectedText.isEmpty()) {
+                String textToSpeak = pendingDetectedText + ". Finished reading text.";
+                guidanceText.setText(textToSpeak);
+                speechGuide.forceSpeak(textToSpeak, true);
+                pendingDetectedText = null;
+                textConfirmationActive = false;
+            } else {
+                triggerOcrRead();
+            }
+        });
+    }
+
+    @Override
     public void onRepeatCommand() {
         runOnUiThread(() -> {
             vibrate();
@@ -455,15 +510,42 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     }
 
     @Override
+    public void onOpenMapsCommand() {
+        runOnUiThread(() -> {
+            vibrate();
+            String dest = navigationGuide.getDestinationName();
+            if (dest.isEmpty()) dest = "Shaheed Sukhdev College";
+            NavigationGuide.openInGoogleMaps(this, dest, navigationGuide.getDestLat(), navigationGuide.getDestLng());
+        });
+    }
+
+    @Override
     public void onStopNavCommand() {
         runOnUiThread(() -> {
             vibrate();
             if (navigationGuide.isActive()) {
                 navigationGuide.stop();
-                navButton.setText("🧭 Navigate");
-                statusPill.setText("● Camera Active");
+                navButton.setText("🧭 Take Me To");
+                openMapsButton.setVisibility(View.GONE);
+                statusPill.setText("● Active");
                 speechGuide.forceSpeak("Navigation stopped.", true);
             }
+        });
+    }
+
+    @Override
+    public void onCheckNfcCommand() {
+        runOnUiThread(() -> {
+            vibrate();
+            if (!settings.nfcEnabled || !nfcReader.isAvailable()) {
+                speechGuide.forceSpeak("NFC is turned off or not available on this phone.", true);
+                voiceStatusText.setText("⚠️ NFC is disabled or not supported.");
+                return;
+            }
+            String prompt = "NFC is active. Hold any medicine package, NFC card, or sticker against the upper back of your phone.";
+            speechGuide.forceSpeak(prompt, true);
+            guidanceText.setText(prompt);
+            voiceStatusText.setText("🏷️ Waiting for NFC tag tap on back of phone...");
         });
     }
 
@@ -479,9 +561,11 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     @Override
     public void onHelpCommand() {
         runOnUiThread(() -> {
-            String helpText = "Voice commands: Start camera, Stop camera, Read text, Repeat, Navigate to a place, Stop navigation, or Settings.";
-            voiceStatusText.setText("💡 " + helpText);
-            speechGuide.forceSpeak(helpText, true);
+            vibrate();
+            String options = "Via Lux voice commands: Say 'Start camera' to begin obstacle detection, 'Take me to' with any place name like Shaheed Sukhdev College for walking directions, 'Open Google Maps' to view map, 'Read text' to read signs and packaging, 'Check NFC' to scan medicine tags, or 'Stop' to pause.";
+            voiceStatusText.setText("💡 " + options);
+            guidanceText.setText(options);
+            speechGuide.forceSpeak(options, true);
         });
     }
 
@@ -494,13 +578,18 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     public void onListeningStateChanged(boolean isListening) {
         runOnUiThread(() -> {
             if (isListening) {
-                voiceMicButton.setText("🔴 Hands-Free Listening (Speak Command)");
-                voiceMicButton.setBackground(card(0xFFFF4B4B, dp(22), Color.WHITE));
+                voiceMicButton.setText("🔴 Listening... Speak Command Now");
+                voiceMicButton.setBackground(card(0xFFFF4B4B, dp(20), Color.WHITE));
             } else {
-                voiceMicButton.setText("🎙️  Hands-Free Voice Control Active");
-                voiceMicButton.setBackground(card(0xFF00E699, dp(22), Color.WHITE));
+                voiceMicButton.setText("🎙️  Tap Anywhere to Speak Command");
+                voiceMicButton.setBackground(card(0xFF00E699, dp(20), Color.WHITE));
             }
         });
+    }
+
+    @Override
+    public void onPartialSpeechHeard(String partial) {
+        runOnUiThread(() -> voiceStatusText.setText("🎙️ Hearing: \"" + partial + "\""));
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -510,10 +599,9 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     private void triggerOcrRead() {
         vibrate();
         ocrButton.setText("⏳ Reading...");
-        guidanceText.setText("Reading text in view. Hold steady...");
-        speechGuide.forceSpeak("Reading text in view", true);
+        guidanceText.setText("Reading text in view. Hold phone steady...");
+        speechGuide.forceSpeak("Reading text", true);
 
-        // If camera is stopped, start it automatically so frames are available
         if (!running) {
             startDetection();
         }
@@ -521,24 +609,28 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Detectors loading (Dual Parallel: YOLO26n + StairVision)
+    // AI Detectors Loading (YOLO26n + StairVision Concurrent)
     // ─────────────────────────────────────────────────────────────────────
 
     private void loadDetectors() {
         cameraExecutor.execute(() -> {
             try {
                 detector = new YoloOnnxDetector(this);
-                try {
-                    stairDetector = new StairVisionDetector(this);
-                } catch (Exception e) {
-                    android.util.Log.w("MainActivity", "StairVision optional load error: " + e.getMessage());
-                }
-                runOnUiThread(() -> statusPill.setText("● AI Ready"));
+                runOnUiThread(() -> statusPill.setText("● YOLO Ready"));
             } catch (Exception e) {
                 runOnUiThread(() -> {
-                    statusPill.setText("● Detector Error");
+                    statusPill.setText("● YOLO Error");
                     guidanceText.setText(e.getMessage());
                 });
+            }
+        });
+
+        stairExecutor.execute(() -> {
+            try {
+                stairDetector = new StairVisionDetector(this);
+                runOnUiThread(() -> statusPill.setText("● Dual AI Ready"));
+            } catch (Exception e) {
+                runOnUiThread(() -> statusPill.setText("● StairVision Err"));
             }
         });
     }
@@ -561,7 +653,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         running = true;
         guidanceEngine.reset();
         startStopButton.setText("⏹ Stop Camera");
-        startStopButton.setBackground(card(0xFF3B1B1B, dp(18), 0xFFFF5555));
+        startStopButton.setBackground(card(0xFF381818, dp(18), 0xFFFF5555));
         statusPill.setText("● Opening...");
         guidanceText.setText("Hold phone upright and point forward.");
         loadingText.setVisibility(View.VISIBLE);
@@ -592,7 +684,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             } catch (Exception e) {
                 running = false;
                 startStopButton.setText("▶ Start Camera");
-                startStopButton.setBackground(card(0xFF1B3B2B, dp(18), 0xFF00E699));
+                startStopButton.setBackground(card(0xFF183828, dp(18), 0xFF00E699));
                 statusPill.setText("● Error");
                 guidanceText.setText("Camera error: " + e.getMessage());
             }
@@ -605,7 +697,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         loadingText.animate().cancel();
         loadingText.setVisibility(View.GONE);
         startStopButton.setText("▶ Start Camera");
-        startStopButton.setBackground(card(0xFF1B3B2B, dp(18), 0xFF00E699));
+        startStopButton.setBackground(card(0xFF183828, dp(18), 0xFF00E699));
         statusPill.setText("● Stopped");
         guidanceText.setText("Detection stopped. Tap Start or say 'Start camera'.");
         previewView.animate().alpha(0.25f).setDuration(250).start();
@@ -614,7 +706,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Dual Parallel Frame Analysis & Merging
+    // Dual Parallel Frame Analysis, Scene Text Detection, & Merging
     // ─────────────────────────────────────────────────────────────────────
 
     private void analyzeImage(ImageProxy image) {
@@ -683,8 +775,29 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
             List<Detection> merged = DetectionMerger.merge(local, latestOnlineDetections);
 
-            // ── OCR Text Reading ──────────────────────────────────────────
+            // ── Passive Scene Text Detection ("Ask when it detects text") ──
             if (settings.ocrEnabled) {
+                ocrProcessor.checkTextPresence(bitmap, now, (sample, fullText) -> runOnUiThread(() -> {
+                    long t = SystemClock.elapsedRealtime();
+                    if (!textConfirmationActive && t - lastTextAskAt > 15000) {
+                        lastTextAskAt = t;
+                        pendingDetectedText = fullText;
+                        textConfirmationActive = true;
+                        vibrate();
+                        guidanceText.setText("📖 Text Detected: \"" + sample + "\"\nSay 'Read' or 'Yes' to hear it, or tap here.");
+                        speechGuide.forceSpeak("Text detected: " + sample + ". Would you like me to read it? Say read or yes.", true);
+
+                        // 8-second confirmation window
+                        mainHandler.postDelayed(() -> {
+                            if (textConfirmationActive) {
+                                textConfirmationActive = false;
+                                pendingDetectedText = null;
+                            }
+                        }, 8000);
+                    }
+                }));
+
+                // ── Active OCR Read (when commanded) ───────────────────────
                 ocrProcessor.process(bitmap, now, recognizedText -> runOnUiThread(() -> {
                     guidanceText.setText(recognizedText);
                     speechGuide.forceSpeak(recognizedText, true);
@@ -710,7 +823,8 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         overlayView.update(
                 detections == null ? Collections.emptyList() : detections,
                 guidanceEngine, width, height);
-        if (guidance != null) {
+        // Only override guidance text if not awaiting text confirmation
+        if (guidance != null && !textConfirmationActive) {
             guidanceText.setText(guidance.message);
             speechGuide.speak(guidance.message, guidance.emergency, guidance.priority);
         }
@@ -722,14 +836,14 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
     private void showDestinationDialog() {
         EditText input = new EditText(this);
-        input.setHint("Enter destination (e.g. Pharmacy, Station)");
+        input.setHint("Enter destination (e.g. Shaheed Sukhdev College, Station)");
         input.setTextColor(Color.WHITE);
         input.setHintTextColor(0xFF607080);
         input.setPadding(dp(16), dp(12), dp(16), dp(12));
 
         new AlertDialog.Builder(this)
                 .setTitle("Walking Navigation")
-                .setMessage("Works with Google Maps API key or free OpenStreetMap routing.")
+                .setMessage("Enter destination, or tap 'Speak Destination'.")
                 .setView(input)
                 .setPositiveButton("Navigate", (d, w) -> {
                     String dest = input.getText().toString().trim();
@@ -751,15 +865,17 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
     private void startWalkingRoute(String destination) {
         navButton.setText("⏹ Stop Nav");
+        openMapsButton.setVisibility(View.VISIBLE);
         statusPill.setText("● Routing...");
         guidanceText.setText("Calculating walking route to " + destination + "...");
-        speechGuide.forceSpeak("Finding walking route to " + destination, true);
+        speechGuide.forceSpeak("Finding route to " + destination, true);
 
         navigationGuide.start(destination, settings.mapsApiKey, (instruction, isError) -> {
             guidanceText.setText(instruction);
             speechGuide.speak(instruction, false, Guidance.PRIORITY_INFO);
             if (isError) {
-                navButton.setText("🧭 Navigate");
+                navButton.setText("🧭 Take Me To");
+                openMapsButton.setVisibility(View.GONE);
                 statusPill.setText("● Active");
             } else {
                 statusPill.setText("● Navigating");
@@ -775,6 +891,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         if (!settings.nfcEnabled) return;
         String message = nfcReader.handleIntent(intent, medicineStore);
         if (message != null) {
+            vibrate();
             guidanceText.setText(message);
             speechGuide.forceSpeak(message, true);
         }

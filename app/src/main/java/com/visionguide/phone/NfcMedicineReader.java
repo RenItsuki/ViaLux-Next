@@ -86,7 +86,7 @@ final class NfcMedicineReader {
         if (medicine != null) {
             return medicine;
         }
-        return "Tag not registered. Open settings to register this medicine.";
+        return "NFC tag detected: " + tagId + ". This tag is not registered. Tap Check NFC to assign a medicine name.";
     }
 
     private static String bytesToHex(byte[] bytes) {

@@ -14,11 +14,16 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
         void onTtsFinished();
     }
 
+    interface OnInitListener {
+        void onTtsReady();
+    }
+
     private TextToSpeech tts;
     private boolean ready = false;
     private String lastMessage = "";
     private long lastStartedAt = 0;
     private TtsStateListener ttsStateListener;
+    private OnInitListener onInitListener;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     SpeechGuide(Context context) {
@@ -29,6 +34,17 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
         this.ttsStateListener = listener;
     }
 
+    void setOnInitListener(OnInitListener listener) {
+        this.onInitListener = listener;
+        if (ready && listener != null) {
+            mainHandler.post(listener::onTtsReady);
+        }
+    }
+
+    boolean isReady() {
+        return ready;
+    }
+
     @Override
     public void onInit(int status) {
         ready = status == TextToSpeech.SUCCESS;
@@ -36,6 +52,9 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
             tts.setLanguage(Locale.US);
             tts.setSpeechRate(1.05f);
             tts.setPitch(1.0f);
+            if (onInitListener != null) {
+                mainHandler.post(onInitListener::onTtsReady);
+            }
 
             tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                 @Override

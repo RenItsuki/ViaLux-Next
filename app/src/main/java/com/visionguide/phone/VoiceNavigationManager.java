@@ -1,5 +1,6 @@
 package com.visionguide.phone;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.hardware.Sensor;
@@ -18,23 +19,26 @@ import java.util.ArrayList;
 import java.util.Locale;
 
 /**
- * VoiceNavigationManager — Continuous, Hands-Free, Zero-Physical-Contact Voice Controller.
+ * VoiceNavigationManager — Continuous, Hands-Free Voice Controller.
  *
- * Designed specifically for low-vision and blind users:
- *   - Continuous listening loop: automatically restarts listening without needing any screen taps.
- *   - Anti-feedback coordination: pauses listening while TextToSpeech is actively speaking
- *     so the microphone never picks up the phone's own voice output.
- *   - Proximity Wave detection: waving a hand over the phone (zero physical touch) triggers listening/repeat.
+ * Designed for low-vision and blind users:
+ *   - Continuous listening loop: automatically restarts listening without needing physical screen touches.
+ *   - Extended silence sensitivity: does not abruptly cut off speech after pauses.
+ *   - Live partial results: immediate visual feedback while the user is speaking.
+ *   - Anti-feedback coordination: pauses speech recognition during TextToSpeech output with safety watchdog.
+ *   - Zero-touch proximity wave: waving hand near the phone re-awakens listening immediately.
  *
- * Recognized Voice Commands:
+ * Supported Voice Commands:
  *   - "Start" / "Start camera" / "Open camera"
  *   - "Stop" / "Stop camera" / "Pause"
- *   - "Read" / "Read text" / "Read label" / "What does it say"
- *   - "Repeat" / "Say again"
- *   - "Navigate to [place]" (e.g. "Navigate to pharmacy", "Directions to Central Park")
+ *   - "Read" / "Read text" / "Yes" / "Read it" (confirms reading detected text)
+ *   - "Take me to [place]" / "Navigate to [place]" (e.g. "Take me to Shaheed Sukhdev College")
+ *   - "Open Google Maps" / "Show map"
  *   - "Stop navigation" / "Cancel route"
+ *   - "Check NFC" / "Scan medicine" / "Read tag"
+ *   - "Repeat" / "Say again"
+ *   - "Options" / "Help" / "What can I say"
  *   - "Settings"
- *   - "Help" / "What can I say"
  */
 final class VoiceNavigationManager implements SensorEventListener {
     private static final String TAG = "VoiceNavManager";
@@ -43,16 +47,20 @@ final class VoiceNavigationManager implements SensorEventListener {
         void onStartCommand();
         void onStopCommand();
         void onReadTextCommand();
+        void onTextConfirmedCommand();
         void onRepeatCommand();
         void onNavigateCommand(String destination);
+        void onOpenMapsCommand();
         void onStopNavCommand();
+        void onCheckNfcCommand();
         void onSettingsCommand();
         void onHelpCommand();
         void onStatusUpdate(String status);
         void onListeningStateChanged(boolean isListening);
+        void onPartialSpeechHeard(String partial);
     }
 
-    private final Context context;
+    private final Activity activity;
     private final CommandListener listener;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -69,8 +77,17 @@ final class VoiceNavigationManager implements SensorEventListener {
     private Sensor proximitySensor;
     private long lastWaveAt = 0;
 
-    VoiceNavigationManager(Context context, CommandListener listener) {
-        this.context = context.getApplicationContext();
+    // Watchdog to prevent mic from getting permanently muted if TTS fails to report done
+    private final Runnable ttsWatchdog = () -> {
+        if (isTtsSpeaking) {
+            Log.w(TAG, "TTS watchdog fired: resetting isTtsSpeaking to false");
+            isTtsSpeaking = false;
+            restartListeningLoop();
+        }
+    };
+
+    VoiceNavigationManager(Activity activity, CommandListener listener) {
+        this.activity = activity;
         this.listener = listener;
         initRecognizer();
         initProximitySensor();
@@ -82,7 +99,7 @@ final class VoiceNavigationManager implements SensorEventListener {
                 speechRecognizer.destroy();
                 speechRecognizer = null;
             }
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context);
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(activity);
         } catch (Exception e) {
             Log.w(TAG, "Speech recognition initialization failed: " + e.getMessage());
             return;
@@ -96,15 +113,18 @@ final class VoiceNavigationManager implements SensorEventListener {
         recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 3000L);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
 
         speechRecognizer.setRecognitionListener(new RecognitionListener() {
             @Override
             public void onReadyForSpeech(Bundle params) {
                 isListening = true;
                 listener.onListeningStateChanged(true);
-                listener.onStatusUpdate("🎙️ Hands-Free Listening... (Say 'Start', 'Read text', or 'Navigate to...')");
+                listener.onStatusUpdate("🎙️ Listening... (Say 'Start', 'Take me to...', 'Read text', or 'Help')");
             }
 
             @Override public void onBeginningOfSpeech() {}
@@ -122,10 +142,10 @@ final class VoiceNavigationManager implements SensorEventListener {
                 isListening = false;
                 listener.onListeningStateChanged(false);
 
-                // Wait longer if recognizer is busy, otherwise resume promptly
+                // Wait longer if recognizer is busy, otherwise restart promptly
                 long delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) ? 1200 : 450;
 
-                // In continuous mode, automatically loop back and resume listening
+                // In continuous mode, loop back and resume listening
                 if (continuousEnabled && !destroyed && !isTtsSpeaking) {
                     mainHandler.postDelayed(() -> restartListeningLoop(), delay);
                 }
@@ -139,43 +159,44 @@ final class VoiceNavigationManager implements SensorEventListener {
                     ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                     if (matches != null && !matches.isEmpty()) {
                         String spoken = matches.get(0).toLowerCase(Locale.US).trim();
-                        Log.d(TAG, "Hands-free speech heard: " + spoken);
+                        Log.d(TAG, "Spoken voice command heard: " + spoken);
                         handleSpokenCommand(spoken);
                     }
                 }
 
                 // Automatically loop back to continue listening hands-free
                 if (continuousEnabled && !destroyed && !isTtsSpeaking) {
-                    mainHandler.postDelayed(() -> restartListeningLoop(), 600);
+                    mainHandler.postDelayed(() -> restartListeningLoop(), 650);
                 }
             }
 
-            @Override public void onPartialResults(Bundle partialResults) {}
+            @Override
+            public void onPartialResults(Bundle partialResults) {
+                if (partialResults != null) {
+                    ArrayList<String> matches = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    if (matches != null && !matches.isEmpty()) {
+                        String partial = matches.get(0);
+                        listener.onPartialSpeechHeard(partial);
+                    }
+                }
+            }
+
             @Override public void onEvent(int eventType, Bundle params) {}
         });
     }
 
     // ── Anti-Feedback Coordination with TextToSpeech ───────────────────────
 
-    /**
-     * Called when TextToSpeech starts or stops speaking.
-     * Prevents the phone's microphone from hearing its own spoken announcements.
-     */
     void setTtsSpeaking(boolean speaking) {
         this.isTtsSpeaking = speaking;
         if (speaking) {
-            // Silence speech recognizer while phone speaks
-            if (isListening && speechRecognizer != null) {
-                try {
-                    speechRecognizer.cancel();
-                } catch (Exception ignored) {}
-                isListening = false;
-                listener.onListeningStateChanged(false);
-            }
+            stopListening();
+            mainHandler.removeCallbacks(ttsWatchdog);
+            mainHandler.postDelayed(ttsWatchdog, 9000);
         } else {
-            // TTS finished speaking — resume hands-free listening loop
+            mainHandler.removeCallbacks(ttsWatchdog);
             if (continuousEnabled && !destroyed) {
-                mainHandler.postDelayed(() -> restartListeningLoop(), 350);
+                mainHandler.postDelayed(this::restartListeningLoop, 400);
             }
         }
     }
@@ -196,7 +217,6 @@ final class VoiceNavigationManager implements SensorEventListener {
                     speechRecognizer.cancel();
                 } catch (Exception ignored) {}
                 isListening = false;
-                // Retry after brief debounce
                 mainHandler.postDelayed(() -> restartListeningLoop(), 1200);
             }
         }
@@ -233,7 +253,7 @@ final class VoiceNavigationManager implements SensorEventListener {
     // ── Command Parser ─────────────────────────────────────────────────────
 
     private void handleSpokenCommand(String spoken) {
-        // Remove conversational filler ("hey via lux", "please", "can you", etc.)
+        // Strip conversational prefixes ("hey via lux", "please", "can you")
         String clean = spoken
                 .replaceFirst("^hey\\s+via\\s+lux\\s*", "")
                 .replaceFirst("^via\\s+lux\\s*", "")
@@ -241,55 +261,20 @@ final class VoiceNavigationManager implements SensorEventListener {
                 .replaceFirst("^can\\s+you\\s*", "")
                 .trim();
 
-        // 1. Start Camera / Detection
-        if (clean.equals("start") || clean.contains("start camera") || clean.contains("start detection")
-                || clean.contains("open camera") || clean.contains("begin") || clean.contains("turn on camera")) {
-            listener.onStatusUpdate("✓ Command: Start Camera");
-            listener.onStartCommand();
-            return;
-        }
-
-        // 2. Stop Camera / Detection
-        if (clean.equals("stop") || clean.contains("stop camera") || clean.contains("pause")
-                || clean.contains("freeze") || clean.contains("turn off camera") || clean.contains("quit detection")) {
-            listener.onStatusUpdate("✓ Command: Stop Camera");
-            listener.onStopCommand();
-            return;
-        }
-
-        // 3. Read Text / OCR
-        if (clean.contains("read") || clean.contains("text") || clean.contains("ocr")
-                || clean.contains("label") || clean.contains("sign") || clean.contains("what does it say")) {
-            listener.onStatusUpdate("✓ Command: Read Text");
-            listener.onReadTextCommand();
-            return;
-        }
-
-        // 4. Repeat
-        if (clean.contains("repeat") || clean.contains("say again") || clean.contains("what was that")
-                || clean.equals("again")) {
-            listener.onStatusUpdate("✓ Command: Repeat");
-            listener.onRepeatCommand();
-            return;
-        }
-
-        // 5. Stop Navigation
-        if (clean.contains("stop nav") || clean.contains("cancel nav") || clean.contains("end nav")
-                || clean.contains("stop navigation") || clean.contains("cancel navigation")) {
-            listener.onStatusUpdate("✓ Command: Stop Navigation");
-            listener.onStopNavCommand();
-            return;
-        }
-
-        // 6. Walking Navigation to Destination
+        // 1. Walking Navigation ("take me to...", "navigate to...", "walk to...", "directions to...")
         if (clean.startsWith("navigate to") || clean.startsWith("directions to")
                 || clean.startsWith("take me to") || clean.startsWith("walk to")
-                || clean.startsWith("go to") || clean.startsWith("navigate")) {
+                || clean.startsWith("go to") || clean.startsWith("route to")
+                || clean.startsWith("how to reach") || clean.startsWith("take me")
+                || clean.startsWith("navigate")) {
             String dest = clean
                     .replaceFirst("^navigate to\\s*", "")
                     .replaceFirst("^directions to\\s*", "")
                     .replaceFirst("^take me to\\s*", "")
+                    .replaceFirst("^take me\\s*", "")
+                    .replaceFirst("^route to\\s*", "")
                     .replaceFirst("^walk to\\s*", "")
+                    .replaceFirst("^how to reach\\s*", "")
                     .replaceFirst("^go to\\s*", "")
                     .replaceFirst("^navigate\\s*", "")
                     .trim();
@@ -301,27 +286,87 @@ final class VoiceNavigationManager implements SensorEventListener {
             }
         }
 
-        // 7. Settings
-        if (clean.contains("settings") || clean.contains("preferences") || clean.contains("options")) {
+        // 2. Open in Google Maps
+        if (clean.contains("google maps") || clean.contains("open maps") || clean.contains("show map")
+                || clean.contains("open map") || clean.contains("launch maps")) {
+            listener.onStatusUpdate("✓ Command: Open Google Maps");
+            listener.onOpenMapsCommand();
+            return;
+        }
+
+        // 3. Stop Navigation
+        if (clean.contains("stop nav") || clean.contains("cancel nav") || clean.contains("end nav")
+                || clean.contains("stop navigation") || clean.contains("cancel navigation")) {
+            listener.onStatusUpdate("✓ Command: Stop Navigation");
+            listener.onStopNavCommand();
+            return;
+        }
+
+        // 4. Start Camera / Obstacle Detection
+        if (clean.equals("start") || clean.contains("start camera") || clean.contains("start detection")
+                || clean.contains("open camera") || clean.contains("begin") || clean.contains("turn on camera")) {
+            listener.onStatusUpdate("✓ Command: Start Camera");
+            listener.onStartCommand();
+            return;
+        }
+
+        // 5. Stop Camera / Detection
+        if (clean.equals("stop") || clean.contains("stop camera") || clean.contains("pause")
+                || clean.contains("freeze") || clean.contains("turn off camera") || clean.contains("quit detection")) {
+            listener.onStatusUpdate("✓ Command: Stop Camera");
+            listener.onStopCommand();
+            return;
+        }
+
+        // 6. Confirm Read Text / OCR Reading
+        if (clean.equals("read") || clean.equals("read it") || clean.equals("read text")
+                || clean.equals("yes") || clean.equals("sure") || clean.equals("okay")
+                || clean.contains("what does it say") || clean.contains("read label")
+                || clean.contains("read sign")) {
+            listener.onStatusUpdate("✓ Command: Read Text");
+            listener.onTextConfirmedCommand();
+            return;
+        }
+
+        // 7. Check NFC / Medicine Scan
+        if (clean.contains("nfc") || clean.contains("tag") || clean.contains("medicine")
+                || clean.contains("scan tag") || clean.contains("check nfc") || clean.contains("read tag")) {
+            listener.onStatusUpdate("✓ Command: Check NFC Tag");
+            listener.onCheckNfcCommand();
+            return;
+        }
+
+        // 8. Repeat Last Speech
+        if (clean.contains("repeat") || clean.contains("say again") || clean.contains("what was that")
+                || clean.equals("again")) {
+            listener.onStatusUpdate("✓ Command: Repeat");
+            listener.onRepeatCommand();
+            return;
+        }
+
+        // 9. Options / Help
+        if (clean.contains("option") || clean.contains("options") || clean.contains("help")
+                || clean.contains("what can i say") || clean.contains("commands") || clean.contains("menu")) {
+            listener.onStatusUpdate("✓ Command: Options & Help");
+            listener.onHelpCommand();
+            return;
+        }
+
+        // 10. Settings
+        if (clean.contains("settings") || clean.contains("preferences")) {
             listener.onStatusUpdate("✓ Command: Settings");
             listener.onSettingsCommand();
             return;
         }
 
-        // 8. Help
-        if (clean.contains("help") || clean.contains("command") || clean.contains("what can i say")) {
-            listener.onHelpCommand();
-            return;
-        }
-
-        listener.onStatusUpdate("Heard: \"" + spoken + "\" (Say 'Help' for commands)");
+        listener.onStatusUpdate("Heard: \"" + spoken + "\" (Say 'Help' for all options)");
     }
 
     // ── Zero-Physical-Contact Proximity Wave Sensor ─────────────────────────
 
     private void initProximitySensor() {
         try {
-            sensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+            sensorManager = (SensorManager) activity.getSystemService(Context.SENSOR_SERVICE);
             if (sensorManager != null) {
                 proximitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY);
                 if (proximitySensor != null) {
@@ -340,11 +385,10 @@ final class VoiceNavigationManager implements SensorEventListener {
             float maxRange = proximitySensor != null ? proximitySensor.getMaximumRange() : 5f;
             long now = System.currentTimeMillis();
 
-            // Hand waved near sensor (< maxRange)
+            // Hand waved near proximity sensor (< maxRange)
             if (distance < maxRange && now - lastWaveAt > 1800) {
                 lastWaveAt = now;
-                Log.d(TAG, "Zero-touch proximity wave detected.");
-                // Immediately awakens listening loop or repeats last guidance
+                Log.d(TAG, "Zero-touch proximity wave detected: waking listening loop.");
                 startListening();
             }
         }
@@ -356,6 +400,7 @@ final class VoiceNavigationManager implements SensorEventListener {
 
     void shutdown() {
         destroyed = true;
+        mainHandler.removeCallbacks(ttsWatchdog);
         if (sensorManager != null) {
             try {
                 sensorManager.unregisterListener(this);

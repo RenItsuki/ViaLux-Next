@@ -8,6 +8,7 @@ final class AppSettings {
 
     private final SharedPreferences prefs;
 
+    // ── Existing speech / detection settings ───────────────────────────────
     int speechDelayMs;
     int repeatCooldownMs;
     float motionThreshold;
@@ -16,41 +17,80 @@ final class AppSettings {
     float edgeIgnoreRatio;
     boolean priorityOverride;
 
+    // ── Online mode (Roboflow) ──────────────────────────────────────────────
+    boolean onlineModeEnabled;   // send frames to Roboflow Workflow
+    String roboflowApiKey;       // loaded from EncryptedSharedPreferences or empty
+
+    // ── Navigation (Google Maps) ────────────────────────────────────────────
+    boolean navigationEnabled;
+    String mapsApiKey;           // loaded from local config or empty
+
+    // ── NFC medicine ────────────────────────────────────────────────────────
+    boolean nfcEnabled;
+
+    // ── OCR ─────────────────────────────────────────────────────────────────
+    boolean ocrEnabled;
+    int ocrIntervalMs;           // minimum ms between OCR runs
+
     AppSettings(Context context) {
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         load();
     }
 
     void load() {
-        speechDelayMs = prefs.getInt("speechDelayMs", 2000);
-        repeatCooldownMs = prefs.getInt("repeatCooldownMs", 10000);
-        motionThreshold = prefs.getFloat("motionThreshold", 0.040f);
-        motionStreakFrames = prefs.getInt("motionStreakFrames", 3);
-        notifyAreaRatio = prefs.getFloat("notifyAreaRatio", 0.035f);
-        edgeIgnoreRatio = prefs.getFloat("edgeIgnoreRatio", 0.18f);
-        priorityOverride = prefs.getBoolean("priorityOverride", true);
+        speechDelayMs      = prefs.getInt("speechDelayMs",      2000);
+        repeatCooldownMs   = prefs.getInt("repeatCooldownMs",   10000);
+        motionThreshold    = prefs.getFloat("motionThreshold",  0.040f);
+        motionStreakFrames  = prefs.getInt("motionStreakFrames", 3);
+        notifyAreaRatio    = prefs.getFloat("notifyAreaRatio",  0.035f);
+        edgeIgnoreRatio    = prefs.getFloat("edgeIgnoreRatio",  0.18f);
+        priorityOverride   = prefs.getBoolean("priorityOverride", true);
+
+        onlineModeEnabled  = prefs.getBoolean("onlineModeEnabled", false);
+        roboflowApiKey     = prefs.getString("roboflowApiKey",   "");
+
+        navigationEnabled  = prefs.getBoolean("navigationEnabled", false);
+        mapsApiKey         = prefs.getString("mapsApiKey",        "");
+
+        nfcEnabled         = prefs.getBoolean("nfcEnabled",  true);
+
+        ocrEnabled         = prefs.getBoolean("ocrEnabled",   false);
+        ocrIntervalMs      = prefs.getInt("ocrIntervalMs",    3000);
     }
 
     void save() {
         prefs.edit()
-                .putInt("speechDelayMs", speechDelayMs)
-                .putInt("repeatCooldownMs", repeatCooldownMs)
+                .putInt("speechDelayMs",     speechDelayMs)
+                .putInt("repeatCooldownMs",  repeatCooldownMs)
                 .putFloat("motionThreshold", motionThreshold)
                 .putInt("motionStreakFrames", motionStreakFrames)
                 .putFloat("notifyAreaRatio", notifyAreaRatio)
                 .putFloat("edgeIgnoreRatio", edgeIgnoreRatio)
                 .putBoolean("priorityOverride", priorityOverride)
+                .putBoolean("onlineModeEnabled", onlineModeEnabled)
+                .putString("roboflowApiKey",  roboflowApiKey)
+                .putBoolean("navigationEnabled", navigationEnabled)
+                .putString("mapsApiKey",       mapsApiKey)
+                .putBoolean("nfcEnabled",      nfcEnabled)
+                .putBoolean("ocrEnabled",      ocrEnabled)
+                .putInt("ocrIntervalMs",       ocrIntervalMs)
                 .apply();
     }
 
     void resetDefaults() {
-        speechDelayMs = 2000;
-        repeatCooldownMs = 10000;
-        motionThreshold = 0.040f;
+        speechDelayMs     = 2000;
+        repeatCooldownMs  = 10000;
+        motionThreshold   = 0.040f;
         motionStreakFrames = 3;
-        notifyAreaRatio = 0.035f;
-        edgeIgnoreRatio = 0.18f;
-        priorityOverride = true;
+        notifyAreaRatio   = 0.035f;
+        edgeIgnoreRatio   = 0.18f;
+        priorityOverride  = true;
+        onlineModeEnabled = false;
+        navigationEnabled = false;
+        nfcEnabled        = true;
+        ocrEnabled        = false;
+        ocrIntervalMs     = 3000;
+        // Note: API keys are NOT reset to avoid losing credentials
         save();
     }
 

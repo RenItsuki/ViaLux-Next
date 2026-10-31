@@ -128,20 +128,25 @@ final class VoiceNavigationManager implements SensorEventListener {
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, activity.getPackageName());
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000L);
+        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L);
 
         speechRecognizer.setRecognitionListener(new RecognitionListener() {
             @Override
             public void onReadyForSpeech(Bundle params) {
                 mainHandler.removeCallbacks(listeningTimeoutWatchdog);
-                mainHandler.postDelayed(listeningTimeoutWatchdog, 10000);
+                mainHandler.postDelayed(listeningTimeoutWatchdog, 12000);
                 isListening = true;
+                playTone(android.media.ToneGenerator.TONE_PROP_BEEP, 100);
                 listener.onListeningStateChanged(true);
-                listener.onStatusUpdate("🎙️ Listening... Speak now! (e.g. 'Is there any car?', 'Take me to...', 'Read text')");
+                listener.onStatusUpdate("🎙️ LISTENING NOW — Speak clearly! (e.g. 'Where are we?', 'Is there any car?')");
             }
 
             @Override public void onBeginningOfSpeech() {
                 mainHandler.removeCallbacks(listeningTimeoutWatchdog);
-                mainHandler.postDelayed(listeningTimeoutWatchdog, 12000);
+                mainHandler.postDelayed(listeningTimeoutWatchdog, 14000);
             }
             @Override public void onRmsChanged(float rmsdB) {}
             @Override public void onBufferReceived(byte[] buffer) {}
@@ -150,6 +155,7 @@ final class VoiceNavigationManager implements SensorEventListener {
             public void onEndOfSpeech() {
                 mainHandler.removeCallbacks(listeningTimeoutWatchdog);
                 isListening = false;
+                playTone(android.media.ToneGenerator.TONE_PROP_ACK, 80);
                 listener.onListeningStateChanged(false);
                 listener.onStatusUpdate("⏳ Processing what you said...");
             }
@@ -163,28 +169,28 @@ final class VoiceNavigationManager implements SensorEventListener {
                 String errorMsg;
                 switch (error) {
                     case SpeechRecognizer.ERROR_NO_MATCH:
-                        errorMsg = "Didn't catch that. Tap 'Press to Speak' and try again.";
+                        errorMsg = "Didn't hear you clearly. Tap anywhere or press to speak again.";
                         break;
                     case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:
-                        errorMsg = "No speech heard. Tap 'Press to Speak' when ready.";
+                        errorMsg = "No speech detected. Tap anywhere to speak.";
                         break;
                     case SpeechRecognizer.ERROR_AUDIO:
                         errorMsg = "Audio recording error. Tap to retry.";
                         break;
                     case SpeechRecognizer.ERROR_CLIENT:
                     case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:
-                        errorMsg = "Microphone reset. Tap 'Press to Speak' to speak.";
-                        initRecognizer();
+                        errorMsg = "Microphone ready. Tap anywhere to speak.";
+                        mainHandler.postDelayed(() -> initRecognizer(), 200);
                         break;
                     case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS:
                         errorMsg = "Microphone permission required.";
                         break;
                     case SpeechRecognizer.ERROR_NETWORK:
                     case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
-                        errorMsg = "Network error. Tap 'Press to Speak' to retry.";
+                        errorMsg = "Network timeout. Tap to retry speech.";
                         break;
                     default:
-                        errorMsg = "Tap 'Press to Speak' to speak.";
+                        errorMsg = "Tap anywhere to speak.";
                         break;
                 }
                 listener.onStatusUpdate(errorMsg);
@@ -209,10 +215,10 @@ final class VoiceNavigationManager implements SensorEventListener {
                         listener.onStatusUpdate("✓ Heard: \"" + spoken + "\"");
                         handleSpokenCommand(spoken);
                     } else {
-                        listener.onStatusUpdate("Didn't catch that. Tap 'Press to Speak' to retry.");
+                        listener.onStatusUpdate("Didn't catch that. Tap anywhere to speak.");
                     }
                 } else {
-                    listener.onStatusUpdate("Didn't catch that. Tap 'Press to Speak' to retry.");
+                    listener.onStatusUpdate("Didn't catch that. Tap anywhere to speak.");
                 }
 
                 // Automatically loop back to continue listening ONLY if continuousEnabled
@@ -236,6 +242,16 @@ final class VoiceNavigationManager implements SensorEventListener {
         });
     }
 
+    private void playTone(int toneType, int durationMs) {
+        try {
+            android.media.ToneGenerator toneGen = new android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 80);
+            toneGen.startTone(toneType, durationMs);
+            mainHandler.postDelayed(() -> {
+                try { toneGen.release(); } catch (Exception ignored) {}
+            }, durationMs + 50);
+        } catch (Throwable ignored) {}
+    }
+
     // ── Anti-Feedback Coordination with TextToSpeech ───────────────────────
 
     void setTtsSpeaking(boolean speaking) {
@@ -254,7 +270,7 @@ final class VoiceNavigationManager implements SensorEventListener {
 
     /**
      * Explicit Push-to-Talk / Press-to-Speak trigger.
-     * Guaranteed to stop TTS, cancel any stale state, re-init recognizer, and listen immediately.
+     * Cancels any stale session and starts listening immediately without destroying binder.
      */
     void forceStartListening() {
         if (destroyed) return;
@@ -262,29 +278,33 @@ final class VoiceNavigationManager implements SensorEventListener {
         mainHandler.removeCallbacks(ttsWatchdog);
         mainHandler.removeCallbacks(listeningTimeoutWatchdog);
 
-        if (speechRecognizer != null) {
+        if (speechRecognizer == null) {
+            initRecognizer();
+        } else {
             try {
                 speechRecognizer.cancel();
             } catch (Exception ignored) {}
         }
         isListening = false;
 
-        // Re-create to ensure a clean Google Speech session
-        initRecognizer();
-
         if (speechRecognizer != null) {
-            try {
-                speechRecognizer.startListening(recognizerIntent);
-                isListening = true;
-                listener.onListeningStateChanged(true);
-                listener.onStatusUpdate("🎙️ Listening... Speak now!");
-                mainHandler.postDelayed(listeningTimeoutWatchdog, 10000);
-            } catch (Exception e) {
-                Log.e(TAG, "forceStartListening error: " + e.getMessage());
-                isListening = false;
-                listener.onListeningStateChanged(false);
-                listener.onStatusUpdate("Could not access microphone. Tap 'Press to Speak' to retry.");
-            }
+            mainHandler.postDelayed(() -> {
+                if (destroyed || isTtsSpeaking) return;
+                try {
+                    speechRecognizer.startListening(recognizerIntent);
+                    isListening = true;
+                    listener.onListeningStateChanged(true);
+                    listener.onStatusUpdate("🎙️ Opening microphone... Please wait for beep.");
+                    mainHandler.postDelayed(listeningTimeoutWatchdog, 12000);
+                } catch (Exception e) {
+                    Log.e(TAG, "forceStartListening error: " + e.getMessage());
+                    isListening = false;
+                    listener.onListeningStateChanged(false);
+                    // Re-init on exception
+                    initRecognizer();
+                    listener.onStatusUpdate("Microphone reset. Tap anywhere to speak.");
+                }
+            }, 60);
         } else {
             listener.onStatusUpdate("⚠️ Speech recognizer unavailable. Tap to retry.");
         }
@@ -352,16 +372,18 @@ final class VoiceNavigationManager implements SensorEventListener {
     // ── Command Parser ─────────────────────────────────────────────────────
 
     private void handleSpokenCommand(String spoken) {
-        // Strip conversational prefixes ("hey via lux", "please", "can you")
+        // Strip conversational prefixes ("hey neurovision", "neurovision", "hey via lux", "via lux", "please", "can you")
         String clean = spoken
+                .replaceFirst("^hey\\s+neurovision\\s*", "")
+                .replaceFirst("^neurovision\\s*", "")
                 .replaceFirst("^hey\\s+via\\s+lux\\s*", "")
                 .replaceFirst("^via\\s+lux\\s*", "")
                 .replaceFirst("^please\\s*", "")
                 .replaceFirst("^can\\s+you\\s*", "")
                 .trim();
 
-        // 0. Conversational Scene Q&A ("is there any car in front of me", "what is in front of me", "how far is the car")
-        if (SceneVoiceAssistant.isAssistantQuery(clean)) {
+        // 0. Conversational Scene & Layout Q&A ("where are we", "are we inside", "is there any car", "what should i do first")
+        if (SceneVoiceAssistant.isAssistantQuery(clean) || SceneLayoutAnalyzer.isLayoutQuery(clean)) {
             listener.onStatusUpdate("💬 Asking: \"" + clean + "\"");
             listener.onSceneAssistantQuery(clean);
             return;

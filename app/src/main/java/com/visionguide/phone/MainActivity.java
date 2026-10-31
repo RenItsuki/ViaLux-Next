@@ -276,7 +276,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         if (hasSpokenWelcome) return;
         hasSpokenWelcome = true;
         mainHandler.postDelayed(() -> {
-            String welcome = "Welcome to Via Lux. Tap 'Press to Speak' anytime to ask questions like: 'Is there any car in front of me?', or say 'Take me to' with any place name. You can also tap 'Start Camera' to begin.";
+            String welcome = "Welcome to NeuroVision. Tap anywhere on the screen or press the microphone button to speak. Ask me: 'Where are we?', 'What should I do first?', or 'Is there any car in front of me?'. You can also tap Start Camera to begin.";
             speechGuide.forceSpeak(welcome, true);
         }, 600);
     }
@@ -289,11 +289,14 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.rgb(10, 14, 20));
 
-        // Camera preview & overlay
+        // Camera preview & overlay (both tap-enabled for low-vision speech trigger)
         previewView = new PreviewView(this);
         previewView.setScaleType(PreviewView.ScaleType.FILL_CENTER);
         previewView.setAlpha(0f);
+        previewView.setOnClickListener(v -> onGuidanceCardTapped());
+
         overlayView = new OverlayView(this);
+        overlayView.setOnClickListener(v -> onGuidanceCardTapped());
 
         // Simple, clean control panel
         LinearLayout panel = new LinearLayout(this);
@@ -309,7 +312,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         header.setPadding(0, 0, 0, dp(6));
 
         TextView title = new TextView(this);
-        title.setText("Via Lux");
+        title.setText("NeuroVision");
         title.setTextColor(Color.WHITE);
         title.setTextSize(24f);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -331,7 +334,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
         // Primary Spoken Guidance Card (Large & High Contrast)
         guidanceText = new TextView(this);
-        guidanceText.setText("Tap Start to begin.\nAsk anytime: 'Is there any car in front of me?'");
+        guidanceText.setText("Tap anywhere to speak.\nAsk: 'Where are we?' or 'What should I do first?'");
         guidanceText.setTextColor(Color.WHITE);
         guidanceText.setTextSize(19f);
         guidanceText.setTypeface(Typeface.DEFAULT_BOLD);
@@ -342,7 +345,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
         // Simple Voice Feedback & Assistant Prompt
         voiceStatusText = new TextView(this);
-        voiceStatusText.setText("🎙️ Tap 'Press to Speak' or ask: 'Is there any car in front of me?'");
+        voiceStatusText.setText("🎙️ Tap anywhere to speak: 'Where are we?', 'Is there any car?'");
         voiceStatusText.setTextColor(0xFF00E699);
         voiceStatusText.setTextSize(13f);
         voiceStatusText.setGravity(Gravity.CENTER);
@@ -350,16 +353,16 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
         // Dedicated Hero "Press to Speak" Button (Large, high-contrast, easy to tap)
         pressToSpeakButton = new Button(this);
-        pressToSpeakButton.setText("🎤 Press to Speak");
+        pressToSpeakButton.setText("🎤 Tap Anywhere to Speak");
         pressToSpeakButton.setTextColor(0xFF00FFB0);
-        pressToSpeakButton.setTextSize(17f);
+        pressToSpeakButton.setTextSize(18f);
         pressToSpeakButton.setAllCaps(false);
         pressToSpeakButton.setTypeface(Typeface.DEFAULT_BOLD);
         pressToSpeakButton.setBackground(card(0xFF103628, dp(18), 0xFF00E699));
         pressToSpeakButton.setOnClickListener(v -> onPressToSpeakClicked());
 
         LinearLayout.LayoutParams speakParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(54));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(60));
         speakParams.setMargins(0, dp(4), 0, dp(6));
 
         // Open in Google Maps button (appears only during walking route)
@@ -494,7 +497,7 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
             pressToSpeakButton.setTextColor(Color.WHITE);
             pressToSpeakButton.setBackground(card(0xFF5A1420, dp(18), 0xFFFF3B5C));
         } else {
-            pressToSpeakButton.setText("🎤 Press to Speak");
+            pressToSpeakButton.setText("🎤 Tap Anywhere to Speak");
             pressToSpeakButton.setTextColor(0xFF00FFB0);
             pressToSpeakButton.setBackground(card(0xFF103628, dp(18), 0xFF00E699));
         }

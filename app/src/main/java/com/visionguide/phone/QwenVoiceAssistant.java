@@ -214,14 +214,15 @@ final class QwenVoiceAssistant {
             try {
                 String sceneDescription = buildSceneArrayContext(detections, depthEstimator, guidanceEngine, imgWidth, imgHeight);
 
-                String systemPrompt = "You are Via Lux, a calm, friendly, and protective sighted walking companion for a blind person. " +
+                String systemPrompt = "You are NeuroVision, an intelligent, calm, and protective sighted walking companion for a blind person. " +
                         "You speak out loud directly to the user through their headphones. " +
                         "Guidelines: " +
                         "1. Speak naturally, warmly, and concisely in simple conversational English. " +
                         "2. Never use bullet points, markdown, asterisks, numbered lists, emojis, or computer jargon. " +
-                        "3. First priority is safety: if anything is blocking their walking path or approaching within 3 meters, warn them immediately and tell them exactly what to do first. " +
-                        "4. If the path ahead is clear, reassure them that it's safe to walk forward. " +
-                        "5. Keep your response short: exactly 1 or 2 spoken sentences so the user is not overwhelmed.";
+                        "3. Understand room layouts and surroundings: if indoor furniture or objects are present, identify whether we are indoors (e.g. dining room, office, living room, bedroom, kitchen) or outdoors along a street/sidewalk, and explain the walking layout. " +
+                        "4. First priority is safety: if anything is blocking their walking path or approaching within 3 meters, warn them immediately and tell them exactly what to do first. " +
+                        "5. If the path ahead is clear, reassure them that it's safe to walk forward. " +
+                        "6. Keep your response short: exactly 1 or 2 spoken sentences so the user is not overwhelmed.";
 
                 StringBuilder promptBuilder = new StringBuilder();
                 promptBuilder.append("User asks: \"").append(userQuery.trim()).append("\"\n\n");
@@ -290,7 +291,7 @@ final class QwenVoiceAssistant {
         if (raw == null) return "";
         String s = raw
                 .replaceAll("<\\|[^>]*\\|>", "")
-                .replaceAll("(?i)^(?:assistant|via\\s*lux|ai|system|bot|response):\\s*", "")
+                .replaceAll("(?i)^(?:assistant|neurovision|via\\s*lux|ai|system|bot|response):\\s*", "")
                 .replaceAll("\\*\\*", "")
                 .replaceAll("\\*", "")
                 .replaceAll("#{1,6}\\s*", "")
@@ -322,8 +323,10 @@ final class QwenVoiceAssistant {
             int imgHeight) {
 
         if (detections == null || detections.isEmpty()) {
-            return "The path directly ahead is completely clear of obstacles for more than 5 meters.";
+            return "Environment: Open space. The path directly ahead is completely clear of obstacles for more than 5 meters.";
         }
+
+        SceneLayoutAnalyzer.LayoutInfo layoutInfo = SceneLayoutAnalyzer.analyze(detections, depthEstimator, imgWidth, imgHeight);
 
         // Sort by distance (nearest first)
         List<Detection> sorted = new ArrayList<>(detections);
@@ -334,6 +337,11 @@ final class QwenVoiceAssistant {
         });
 
         StringBuilder sb = new StringBuilder();
+        sb.append("Detected Environment: ").append(layoutInfo.environmentSummary).append("\n");
+        sb.append("Room / Area Layout: ").append(layoutInfo.layoutSummary).append("\n");
+        sb.append("Recommended Walking Corridor: ").append(layoutInfo.recommendedCorridor).append(" corridor\n\n");
+        sb.append("Objects in camera view:\n");
+
         int count = 0;
         for (Detection d : sorted) {
             if (count++ >= 5) break; // Limit to 5 nearest objects

@@ -35,7 +35,7 @@ final class SettingsDialog {
 
         // ── Detection / speech ──────────────────────────────────────────────
         panel.addView(section(context, "Detection & Speech"));
-        panel.addView(help(context, "Tune how Via Lux speaks. Higher-priority danger can still interrupt, but unchanged objects stay quiet."));
+        panel.addView(help(context, "Tune how NeuroVision speaks. Higher-priority danger can still interrupt, but unchanged objects stay quiet."));
 
         TextView speechLabel = label(context, "Speech delay: " + (settings.speechDelayMs / 1000f) + " sec");
         SeekBar speechDelay = new SeekBar(context);
@@ -172,7 +172,7 @@ final class SettingsDialog {
         scroll.addView(panel);
 
         new AlertDialog.Builder(context)
-                .setTitle("Via Lux Settings")
+                .setTitle("NeuroVision Settings")
                 .setView(scroll)
                 .setNegativeButton("Reset", (dialog, which) -> {
                     settings.resetDefaults();

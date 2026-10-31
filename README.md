@@ -1,8 +1,8 @@
-# Via Lux (ViaLux-Next)
+# NeuroVision
 
-**Via Lux** is an Android mobile vision and voice-guided scene awareness assistant designed for visual accessibility. Developed after completing the Clever Harvey AI program, it combines on-device YOLO26n object detection, dual-camera geometric depth estimation, a conversational natural-language visual scene assistant, proactive OCR text reading, turn-by-turn walking navigation, and NFC medicine identification.
+**NeuroVision** is an Android mobile vision and voice-guided scene awareness assistant designed for visual accessibility. Developed after completing the Clever Harvey AI program, it combines on-device YOLO26n object detection, dual-camera geometric depth estimation, on-device spatial scene and room layout understanding, a conversational natural-language visual assistant, proactive OCR text reading, turn-by-turn walking navigation, and NFC medicine identification.
 
-> ⚠️ **Important Disclaimer:** Via Lux is an educational and exploratory prototype. It is **not** a certified medical device, safety aid, or mobility replacement, and does **not** guarantee obstacle or collision avoidance.
+> ⚠️ **Important Disclaimer:** NeuroVision is an educational and exploratory prototype. It is **not** a certified medical device, safety aid, or mobility replacement, and does **not** guarantee obstacle or collision avoidance.
 
 ---
 

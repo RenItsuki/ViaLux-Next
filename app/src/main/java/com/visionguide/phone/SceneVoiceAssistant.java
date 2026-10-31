@@ -32,6 +32,10 @@ final class SceneVoiceAssistant {
         if (spoken == null) return false;
         String s = spoken.toLowerCase(Locale.US).trim();
 
+        if (SceneLayoutAnalyzer.isLayoutQuery(s)) {
+            return true;
+        }
+
         return s.startsWith("is there")
                 || s.startsWith("are there")
                 || s.startsWith("do you see")
@@ -70,11 +74,14 @@ final class SceneVoiceAssistant {
             String lastOcrText) {
 
         if (spoken == null || spoken.trim().isEmpty()) {
-            return "I am listening. Ask me: 'What should I do first?' or 'Is there any car in front of me?'";
+            return "I am listening. Ask me: 'Where are we?', 'What should I do first?', or 'Is there any car in front of me?'";
         }
 
         String q = spoken.toLowerCase(Locale.US)
+                .replaceAll("^hey\\s+neurovision\\s*", "")
+                .replaceAll("^neurovision\\s*", "")
                 .replaceAll("^hey\\s+via\\s+lux\\s*", "")
+                .replaceAll("^via\\s+lux\\s*", "")
                 .replaceAll("^please\\s*", "")
                 .replaceAll("^can\\s+you\\s*tell\\s+me\\s*", "")
                 .replaceAll("^tell\\s+me\\s*", "")
@@ -82,7 +89,12 @@ final class SceneVoiceAssistant {
 
         List<Detection> active = (detections != null) ? detections : Collections.emptyList();
 
-        // ── 0. "What should I do first?" / Action Advice ──────────────────────
+        // ── 0. Layout & Environment Query ("Where are we?", "Are we inside?", "Room layout") ──
+        if (SceneLayoutAnalyzer.isLayoutQuery(q)) {
+            return SceneLayoutAnalyzer.answerLayoutQuery(active, depthEstimator, imgWidth, imgHeight);
+        }
+
+        // ── 1. "What should I do first?" / Action Advice ──────────────────────
         if (q.contains("what should i do") || q.contains("what to do") || q.contains("what do i do")
                 || q.contains("first") || q.contains("advise") || q.contains("suggest")
                 || q.contains("help me") || q.contains("how should i") || q.contains("next")
@@ -226,6 +238,8 @@ final class SceneVoiceAssistant {
             return "Your path directly ahead is completely clear. You can safely step forward.";
         }
 
+        SceneLayoutAnalyzer.LayoutInfo layoutInfo = SceneLayoutAnalyzer.analyze(detections, depthEstimator, imgWidth, imgHeight);
+
         // 1. Moving hazard takes top priority
         for (Detection d : detections) {
             boolean moving = guidanceEngine != null && guidanceEngine.isMoving(d, imgWidth, imgHeight);
@@ -238,27 +252,15 @@ final class SceneVoiceAssistant {
             }
         }
 
-        // 2. Immediate obstacle in center walking path
-        Detection centerObj = null;
-        float minCenterDist = Float.MAX_VALUE;
-        for (Detection d : detections) {
-            String region = GuidanceEngine.regionFor(d, imgWidth);
-            if (region.equals("center")) {
-                float dist = depthEstimator.estimateDistanceMeters(d, imgWidth, imgHeight);
-                if (dist < minCenterDist) {
-                    minCenterDist = dist;
-                    centerObj = d;
-                }
-            }
-        }
-
-        if (centerObj != null) {
-            String distStr = String.format(Locale.US, "%.1f", minCenterDist);
-            if (minCenterDist < 1.4f) {
-                return "Stop right now. There is a " + centerObj.label + " directly in front of you, only "
-                        + distStr + " meters away. Step slightly right to walk around it.";
-            } else if (minCenterDist < 3.0f) {
-                return "Step slightly to your right. There is a " + centerObj.label + " ahead in your path, about "
+        // 2. Immediate obstacle in center walking path (with corridor guidance)
+        if (layoutInfo.centerBlocked && layoutInfo.primaryCenterObstacle != null) {
+            String distStr = String.format(Locale.US, "%.1f", layoutInfo.centerObstacleDistance);
+            if (layoutInfo.centerObstacleDistance < 1.4f) {
+                return "Stop right now. There is a " + layoutInfo.primaryCenterObstacle.label + " directly in front of you, only "
+                        + distStr + " meters away. Step to your " + layoutInfo.recommendedCorridor + " to bypass it.";
+            } else {
+                return "Step to your " + layoutInfo.recommendedCorridor + ". There is a "
+                        + layoutInfo.primaryCenterObstacle.label + " ahead in your path, about "
                         + distStr + " meters away.";
             }
         }
@@ -282,7 +284,14 @@ final class SceneVoiceAssistant {
             return "The path directly ahead is completely clear. No obstacles detected.";
         }
 
+        SceneLayoutAnalyzer.LayoutInfo layoutInfo = SceneLayoutAnalyzer.analyze(detections, depthEstimator, imgWidth, imgHeight);
         StringBuilder sb = new StringBuilder();
+
+        // Lead with environmental understanding (e.g. "We are indoors, in what appears to be a dining room.")
+        if (layoutInfo.environment != SceneLayoutAnalyzer.EnvironmentType.UNKNOWN) {
+            sb.append(layoutInfo.environmentSummary).append(" ");
+        }
+
         Detection centerObj = null;
         for (Detection d : detections) {
             if (GuidanceEngine.regionFor(d, imgWidth).equals("center")) {

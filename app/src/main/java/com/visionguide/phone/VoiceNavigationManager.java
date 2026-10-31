@@ -465,7 +465,10 @@ final class VoiceNavigationManager implements SensorEventListener {
             return;
         }
 
-        listener.onStatusUpdate("Heard: \"" + spoken + "\" (Say 'Help' for all options)");
+        // 11. Conversational Voice AI (Qwen / Scene Assistant)
+        // Any natural phrase or question is answered intelligently
+        listener.onStatusUpdate("💬 " + clean);
+        listener.onSceneAssistantQuery(clean);
     }
 
     // ── Zero-Physical-Contact Proximity Wave Sensor ─────────────────────────

@@ -50,7 +50,7 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
         ready = status == TextToSpeech.SUCCESS;
         if (ready) {
             tts.setLanguage(Locale.US);
-            tts.setSpeechRate(1.05f);
+            tts.setSpeechRate(0.98f);
             tts.setPitch(1.0f);
             if (onInitListener != null) {
                 mainHandler.post(onInitListener::onTtsReady);
@@ -81,34 +81,59 @@ final class SpeechGuide implements TextToSpeech.OnInitListener {
         }
     }
 
+    /**
+     * Cleans raw text for natural TTS reading: removes asterisks, brackets, parentheticals, and emoji.
+     */
+    static String cleanForSpeech(String raw) {
+        if (raw == null) return "";
+        return raw
+                .replaceAll("<\\|[^>]*\\|>", "")
+                .replaceAll("\\*\\*", "")
+                .replaceAll("\\*", "")
+                .replaceAll("#{1,6}\\s*", "")
+                .replaceAll("`{1,3}[^`]*`{1,3}", "")
+                .replaceAll("`", "")
+                .replaceAll("(?m)^\\s*[-*•\\d+.]+\\s+", "")
+                .replaceAll("\\[[^\\]]*\\]", "")
+                .replaceAll("\\((?:[0-9.]+\\s*(?:m|meters?|metres?)|moving|stationary)\\)", "")
+                .replaceAll("&", " and ")
+                .replaceAll("%", " percent ")
+                .replaceAll("@", " at ")
+                .replaceAll("[\\p{So}\\p{Cn}]", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
     void speak(String message, boolean emergency, int priority) {
-        if (!ready || tts == null || message == null || message.trim().isEmpty()) {
+        String clean = cleanForSpeech(message);
+        if (!ready || tts == null || clean.isEmpty()) {
             return;
         }
         long now = System.currentTimeMillis();
-        if (message.equals(lastMessage) && now - lastStartedAt < 6000 && !emergency) {
+        if (clean.equals(lastMessage) && now - lastStartedAt < 6000 && !emergency) {
             return;
         }
         if (tts.isSpeaking() && !emergency && priority < Guidance.PRIORITY_URGENT) {
             return;
         }
-        lastMessage = message;
+        lastMessage = clean;
         lastStartedAt = now;
         int mode = emergency || priority >= Guidance.PRIORITY_URGENT
                 ? TextToSpeech.QUEUE_FLUSH
                 : TextToSpeech.QUEUE_ADD;
-        tts.speak(message, mode, null, "via-lux-" + System.nanoTime());
+        tts.speak(clean, mode, null, "via-lux-" + System.nanoTime());
     }
 
     /** Speak immediately bypassing cooldown, used for voice commands, OCR reading, and repeating. */
     void forceSpeak(String message, boolean flush) {
-        if (!ready || tts == null || message == null || message.trim().isEmpty()) {
+        String clean = cleanForSpeech(message);
+        if (!ready || tts == null || clean.isEmpty()) {
             return;
         }
-        lastMessage = message;
+        lastMessage = clean;
         lastStartedAt = System.currentTimeMillis();
         int mode = flush ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
-        tts.speak(message, mode, null, "via-lux-force-" + System.nanoTime());
+        tts.speak(clean, mode, null, "via-lux-force-" + System.nanoTime());
     }
 
     void stopSpeaking() {

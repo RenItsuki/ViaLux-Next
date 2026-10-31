@@ -81,8 +81,8 @@ final class QwenVoiceAssistant {
             if (modelFile != null && modelFile.exists() && modelFile.length() > 100_000_000L) {
                 notifyStatus(callback, false, "Loading Qwen 2.5 Voice AI into memory...");
                 try {
-                    // Initialize llama.cpp native session: contextSize=2048, threads=4, gpuLayers=0 (CPU NEON)
-                    long handle = LlamaJNI.INSTANCE.nativeLoadModel(modelFile.getAbsolutePath(), 2048, 4, 0);
+                    // Initialize llama.cpp native session: contextSize=1024, threads=4, gpuLayers=0 (CPU NEON)
+                    long handle = LlamaJNI.INSTANCE.nativeLoadModel(modelFile.getAbsolutePath(), 1024, 4, 0);
                     if (handle != 0) {
                         modelHandle = handle;
                         isLoaded = true;
@@ -163,17 +163,24 @@ final class QwenVoiceAssistant {
                     return targetFile;
                 }
 
+                File tempFile = new File(targetDir, MODEL_FILENAME + ".extract.tmp");
                 String assetPath = "models/" + MODEL_FILENAME;
                 try (InputStream in = context.getAssets().open(assetPath);
-                     OutputStream out = new FileOutputStream(targetFile)) {
-                    byte[] buffer = new byte[64 * 1024];
+                     OutputStream out = new FileOutputStream(tempFile)) {
+                    byte[] buffer = new byte[1024 * 1024]; // 1 MB buffer for fast transfer
                     int read;
                     while ((read = in.read(buffer)) != -1) {
                         out.write(buffer, 0, read);
                     }
                     out.flush();
                 }
-                return targetFile;
+
+                if (tempFile.length() > 400_000_000L) {
+                    if (targetFile.exists()) targetFile.delete();
+                    if (tempFile.renameTo(targetFile)) {
+                        return targetFile;
+                    }
+                }
             }
         } catch (Exception e) {
             Log.d(TAG, "Model not found in assets: " + e.getMessage());
@@ -207,31 +214,37 @@ final class QwenVoiceAssistant {
             try {
                 String sceneDescription = buildSceneArrayContext(detections, depthEstimator, guidanceEngine, imgWidth, imgHeight);
 
-                String systemPrompt = "You are Via Lux, an intelligent assistive vision AI for blind users. " +
-                        "You interpret the user's voice and analyze the spatial scene array of obstacles with their real-world distances in meters. " +
-                        "Always prioritize user safety: immediate obstacles (< 3m) directly ahead, moving vehicles, and path obstacles. " +
-                        "Tell the user what they should do FIRST (e.g., 'Stop! Car directly ahead 2 meters', 'Path is clear ahead', 'Step right to avoid the chair'). " +
-                        "Keep your response strictly under 2 sentences, clear and direct for voice.";
+                String systemPrompt = "You are Via Lux, a calm, friendly, and protective sighted walking companion for a blind person. " +
+                        "You speak out loud directly to the user through their headphones. " +
+                        "Guidelines: " +
+                        "1. Speak naturally, warmly, and concisely in simple conversational English. " +
+                        "2. Never use bullet points, markdown, asterisks, numbered lists, emojis, or computer jargon. " +
+                        "3. First priority is safety: if anything is blocking their walking path or approaching within 3 meters, warn them immediately and tell them exactly what to do first. " +
+                        "4. If the path ahead is clear, reassure them that it's safe to walk forward. " +
+                        "5. Keep your response short: exactly 1 or 2 spoken sentences so the user is not overwhelmed.";
 
-                String userPrompt = "<|im_start|>system\n" + systemPrompt + "<|im_end|>\n" +
-                        "<|im_start|>user\n" +
-                        "User query: \"" + userQuery + "\"\n" +
-                        "Detected visual scene:\n" + sceneDescription + "\n" +
-                        (lastOcrText != null && !lastOcrText.isEmpty() ? "Visible text in camera: \"" + lastOcrText + "\"\n" : "") +
-                        (navInstruction != null && !navInstruction.isEmpty() ? "Active walking navigation step: \"" + navInstruction + "\"\n" : "") +
-                        "What should I do first or what is your advice?<|im_end|>\n" +
-                        "<|im_start|>assistant\n";
+                StringBuilder promptBuilder = new StringBuilder();
+                promptBuilder.append("User asks: \"").append(userQuery.trim()).append("\"\n\n");
+                promptBuilder.append("Current camera and sensor view:\n");
+                promptBuilder.append(sceneDescription).append("\n");
+                if (lastOcrText != null && !lastOcrText.trim().isEmpty()) {
+                    promptBuilder.append("Text on signs or objects in view: \"").append(lastOcrText.trim()).append("\"\n");
+                }
+                if (navInstruction != null && !navInstruction.trim().isEmpty()) {
+                    promptBuilder.append("Active walking route direction: \"").append(navInstruction.trim()).append("\"\n");
+                }
+                promptBuilder.append("\nPlease give a natural, helpful, 1 or 2 sentence spoken response directly answering the user.");
 
-                // Generate response with llama.cpp
+                // Generate response with llama.cpp: prompt (user message), systemPrompt (system message)
                 String rawJson = LlamaJNI.INSTANCE.nativeComplete(
                         modelHandle,
-                        userPrompt,
-                        "",
-                        80,     // max tokens
-                        0.3f,   // temperature (focused & deterministic)
-                        0.9f,   // top-p
-                        40,     // top-k
-                        -1      // random seed
+                        promptBuilder.toString(), // user prompt
+                        systemPrompt,             // system prompt
+                        100,                      // max tokens
+                        0.55f,                    // temperature for natural spoken response
+                        0.90f,                    // top-p
+                        40,                       // top-k
+                        -1                        // random seed
                 );
 
                 String speechText = null;
@@ -244,16 +257,14 @@ final class QwenVoiceAssistant {
                     } catch (Exception ignored) {}
                 }
 
-                if (speechText == null || speechText.isEmpty()) {
+                if (speechText != null && !speechText.isEmpty()) {
+                    speechText = sanitizeLlmResponse(speechText);
+                }
+
+                // If LLM returned empty, broken, or too short, use refined natural fallback
+                if (speechText == null || speechText.length() < 4) {
                     speechText = SceneVoiceAssistant.answerQuery(
                             userQuery, detections, depthEstimator, guidanceEngine, imgWidth, imgHeight, lastOcrText);
-                } else {
-                    // Clean any stray chat tokens
-                    speechText = speechText
-                            .replace("<|im_end|>", "")
-                            .replace("<|im_start|>", "")
-                            .replaceAll("\\s+", " ")
-                            .trim();
                 }
 
                 String action = extractActionIntent(userQuery);
@@ -273,7 +284,35 @@ final class QwenVoiceAssistant {
     }
 
     /**
-     * Formats the visual scene array of detected objects with distance and position.
+     * Cleans raw LLM text for spoken natural audio: strips ChatML tags, prefixes, markdown, and emojis.
+     */
+    static String sanitizeLlmResponse(String raw) {
+        if (raw == null) return "";
+        String s = raw
+                .replaceAll("<\\|[^>]*\\|>", "")
+                .replaceAll("(?i)^(?:assistant|via\\s*lux|ai|system|bot|response):\\s*", "")
+                .replaceAll("\\*\\*", "")
+                .replaceAll("\\*", "")
+                .replaceAll("#{1,6}\\s*", "")
+                .replaceAll("`{1,3}[^`]*`{1,3}", "")
+                .replaceAll("`", "")
+                .replaceAll("(?m)^\\s*[-*•\\d+.]+\\s+", "")
+                .replaceAll("[\\p{So}\\p{Cn}]", "")
+                .replaceAll("\\[[^\\]]*\\]", "")
+                .replaceAll("\\((?:[0-9.]+\\s*(?:m|meters?|metres?)|moving|stationary)\\)", "")
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        // If the model was cut off mid-sentence, trim to the last sentence ending punctuation
+        int lastPeriod = Math.max(s.lastIndexOf('.'), Math.max(s.lastIndexOf('!'), s.lastIndexOf('?')));
+        if (lastPeriod > 20 && lastPeriod < s.length() - 1) {
+            s = s.substring(0, lastPeriod + 1).trim();
+        }
+        return s;
+    }
+
+    /**
+     * Formats the visual scene array of detected objects into natural descriptive English.
      */
     private String buildSceneArrayContext(
             List<Detection> detections,
@@ -283,7 +322,7 @@ final class QwenVoiceAssistant {
             int imgHeight) {
 
         if (detections == null || detections.isEmpty()) {
-            return "No obstacles or objects detected. Path appears open.";
+            return "The path directly ahead is completely clear of obstacles for more than 5 meters.";
         }
 
         // Sort by distance (nearest first)
@@ -297,19 +336,16 @@ final class QwenVoiceAssistant {
         StringBuilder sb = new StringBuilder();
         int count = 0;
         for (Detection d : sorted) {
-            if (count++ >= 6) break; // Limit to 6 nearest objects
-            float dist = depthEstimator != null ? depthEstimator.estimateDistanceMeters(d, imgWidth, imgHeight) : 5f;
+            if (count++ >= 5) break; // Limit to 5 nearest objects
+            float dist = depthEstimator != null ? depthEstimator.estimateDistanceMeters(d, imgWidth, imgHeight) : 4f;
             String region = GuidanceEngine.regionFor(d, imgWidth);
             boolean moving = guidanceEngine != null && guidanceEngine.isMoving(d, imgWidth, imgHeight);
 
-            sb.append("- ")
-                    .append(d.label)
-                    .append(": ")
-                    .append(String.format(Locale.US, "%.1f", dist))
-                    .append("m away, ")
-                    .append(region.equals("center") ? "directly ahead (center)" : "to your " + region)
-                    .append(moving ? ", MOVING" : ", stationary")
-                    .append("\n");
+            String pos = region.equals("center") ? "directly ahead in your path" : "on your " + region;
+            String motion = moving ? "and is currently moving" : "stationary";
+            String distStr = String.format(Locale.US, "%.1f meters away", dist);
+
+            sb.append("- A ").append(d.label).append(" is ").append(distStr).append(" ").append(pos).append(" (").append(motion).append(").\n");
         }
         return sb.toString().trim();
     }

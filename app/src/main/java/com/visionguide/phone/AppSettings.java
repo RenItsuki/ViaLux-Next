@@ -51,7 +51,7 @@ final class AppSettings {
         notifyAreaRatio    = prefs.getFloat("notifyAreaRatio",  0.035f);
         edgeIgnoreRatio    = prefs.getFloat("edgeIgnoreRatio",  0.18f);
         geminiApiKey       = prefs.getString("geminiApiKey", BuildConfig.GEMINI_API_KEY);
-        if (geminiApiKey == null || geminiApiKey.isEmpty()) {
+        if (geminiApiKey == null || geminiApiKey.trim().isEmpty() || geminiApiKey.contains("AQ.Ab8RN6K40dJ")) {
             geminiApiKey = BuildConfig.GEMINI_API_KEY;
         }
 

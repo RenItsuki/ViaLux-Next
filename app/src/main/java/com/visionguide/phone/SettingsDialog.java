@@ -1,8 +1,13 @@
 package com.visionguide.phone;
 
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -13,6 +18,7 @@ import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
 final class SettingsDialog {
     interface OnSettingsChanged {
@@ -32,6 +38,102 @@ final class SettingsDialog {
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(pad, pad, pad, 4);
         panel.setBackgroundColor(0xFF111C28);
+
+        // ── 1. Gemini Voice AI (Featured at the Top) ──────────────────────
+        LinearLayout geminiCard = new LinearLayout(context);
+        geminiCard.setOrientation(LinearLayout.VERTICAL);
+        geminiCard.setPadding(dp(context, 14), dp(context, 14), dp(context, 14), dp(context, 14));
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setColor(0xFF162536);
+        cardBg.setCornerRadius(dp(context, 12));
+        cardBg.setStroke(dp(context, 1), 0xFF00E699);
+        geminiCard.setBackground(cardBg);
+
+        TextView geminiTitle = new TextView(context);
+        geminiTitle.setText("✨ Gemini Voice AI (Brain & Vision)");
+        geminiTitle.setTextColor(0xFF00E699);
+        geminiTitle.setTextSize(16f);
+        geminiTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        geminiCard.addView(geminiTitle);
+
+        TextView geminiHelp = help(context, "Powers conversational voice AI, free-hand navigation, deep 3D scene reasoning, and multimodal high-accuracy OCR.");
+        geminiCard.addView(geminiHelp);
+
+        EditText geminiKeyEdit = editText(context, settings.geminiApiKey, "Gemini API Key (starts with AQ...)");
+        geminiKeyEdit.setTextSize(13f);
+        geminiKeyEdit.setBackgroundColor(0xFF0C141E);
+        geminiKeyEdit.setPadding(dp(context, 10), dp(context, 10), dp(context, 10), dp(context, 10));
+        geminiCard.addView(geminiKeyEdit);
+
+        // Status indicator
+        TextView testStatusText = new TextView(context);
+        boolean hasKey = settings.geminiApiKey != null && !settings.geminiApiKey.trim().isEmpty();
+        testStatusText.setText(hasKey ? "● Key configured" : "⚠️ No API Key entered");
+        testStatusText.setTextColor(hasKey ? 0xFF37D4A7 : 0xFFFFB020);
+        testStatusText.setTextSize(12f);
+        testStatusText.setPadding(0, dp(context, 6), 0, dp(context, 8));
+        geminiCard.addView(testStatusText);
+
+        // Button row: Paste Key, Test Key, Default Key
+        LinearLayout btnRow = new LinearLayout(context);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        btnRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        Button pasteBtn = dialogButton(context, "📋 Paste Key");
+        pasteBtn.setOnClickListener(v -> {
+            ClipboardManager clipboard = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null && clipboard.hasPrimaryClip() && clipboard.getPrimaryClip().getItemCount() > 0) {
+                CharSequence text = clipboard.getPrimaryClip().getItemAt(0).getText();
+                if (text != null && text.length() > 0) {
+                    geminiKeyEdit.setText(text.toString().trim());
+                    Toast.makeText(context, "API Key pasted from clipboard", Toast.LENGTH_SHORT).show();
+                    testStatusText.setText("● Key updated (unsaved - press Save below)");
+                    testStatusText.setTextColor(0xFF37D4A7);
+                } else {
+                    Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show();
+                }
+            } else {
+                Toast.makeText(context, "No clipboard data available", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        Button testBtn = dialogButton(context, "🧪 Test Key");
+        testBtn.setOnClickListener(v -> {
+            String candidateKey = geminiKeyEdit.getText().toString().trim();
+            if (candidateKey.isEmpty()) {
+                testStatusText.setText("❌ API key cannot be empty");
+                testStatusText.setTextColor(0xFFFF5252);
+                return;
+            }
+            testStatusText.setText("⏳ Testing Gemini connection...");
+            testStatusText.setTextColor(0xFF00E699);
+            if (geminiAssistant != null) {
+                geminiAssistant.testApiKey(candidateKey, (isReady, msg) -> {
+                    testStatusText.setText(msg);
+                    testStatusText.setTextColor(isReady ? 0xFF00E699 : 0xFFFF5252);
+                });
+            } else {
+                testStatusText.setText("● Key format looks valid");
+                testStatusText.setTextColor(0xFF00E699);
+            }
+        });
+
+        Button defaultBtn = dialogButton(context, "🔄 Default Key");
+        defaultBtn.setOnClickListener(v -> {
+            geminiKeyEdit.setText(BuildConfig.GEMINI_API_KEY);
+            testStatusText.setText("● Restored to default build key");
+            testStatusText.setTextColor(0xFF37D4A7);
+            Toast.makeText(context, "Restored default key", Toast.LENGTH_SHORT).show();
+        });
+
+        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        btnParams.setMargins(dp(context, 2), 0, dp(context, 2), 0);
+        btnRow.addView(pasteBtn, btnParams);
+        btnRow.addView(testBtn, btnParams);
+        btnRow.addView(defaultBtn, btnParams);
+
+        geminiCard.addView(btnRow);
+        panel.addView(geminiCard);
 
         // ── Detection / speech ──────────────────────────────────────────────
         panel.addView(section(context, "Detection & Speech"));
@@ -133,11 +235,6 @@ final class SettingsDialog {
         ocrCheck.setChecked(settings.ocrEnabled);
         panel.addView(ocrCheck);
 
-        // ── Gemini Voice AI (Google Gemini 3.5 Flash) ──────────────────────
-        panel.addView(section(context, "Gemini Voice AI (Google Gemini 3.5 Flash)"));
-        panel.addView(help(context, "Powers intelligent conversational voice navigation, deep scene layout understanding, hazard priority reasoning, and multimodal Gemini Vision OCR."));
-        EditText geminiKeyEdit = editText(context, settings.geminiApiKey, "Gemini API Key");
-        panel.addView(geminiKeyEdit);
 
         ScrollView scroll = new ScrollView(context);
         scroll.addView(panel);
@@ -237,6 +334,20 @@ final class SettingsDialog {
             @Override public void onStartTrackingTouch(SeekBar s) { }
             @Override public void onStopTrackingTouch(SeekBar s) { }
         };
+    }
+
+    private static Button dialogButton(Context context, String text) {
+        Button b = new Button(context);
+        b.setText(text);
+        b.setTextSize(11f);
+        b.setTextColor(Color.WHITE);
+        b.setAllCaps(false);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xFF22354A);
+        bg.setCornerRadius(dp(context, 6));
+        b.setBackground(bg);
+        b.setPadding(dp(context, 6), dp(context, 6), dp(context, 6), dp(context, 6));
+        return b;
     }
 
     private static int dp(Context context, int value) {

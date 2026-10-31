@@ -150,36 +150,40 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
         navigationGuide = new NavigationGuide(this);
         medicineStore   = new MedicineStore(this);
         nfcReader       = new NfcMedicineReader(this);
-        voiceNav        = new VoiceNavigationManager(this, this);
         vibrator        = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+
+        // 1. Build UI first so all views (statusPill, voiceStatusText, etc.) exist
+        buildUi();
+
+        // 2. Initialize Voice Controller & Gemini Assistant after UI
+        voiceNav        = new VoiceNavigationManager(this, this);
         geminiAssistant = new GeminiVoiceAssistant(this, settings);
 
         geminiAssistant.initialize((isReady, message) -> runOnUiThread(() -> {
-            if (isReady) {
-                statusPill.setText("✨ Gemini AI");
-                statusPill.setTextColor(0xFF00E699);
-                voiceStatusText.setText("✨ " + message + " · Tap anywhere to speak");
-            } else {
-                voiceStatusText.setText(message);
+            if (statusPill != null) {
+                statusPill.setText(isReady ? "✨ Gemini AI" : "● Ready");
+                statusPill.setTextColor(isReady ? 0xFF00E699 : 0xFFFFB020);
+            }
+            if (voiceStatusText != null) {
+                voiceStatusText.setText(isReady ? "✨ " + message + " · Tap anywhere to speak" : message);
             }
         }));
 
         speechGuide.setTtsStateListener(new SpeechGuide.TtsStateListener() {
             @Override
             public void onTtsStarted() {
-                voiceNav.setTtsSpeaking(true);
+                if (voiceNav != null) voiceNav.setTtsSpeaking(true);
             }
 
             @Override
             public void onTtsFinished() {
-                voiceNav.setTtsSpeaking(false);
+                if (voiceNav != null) voiceNav.setTtsSpeaking(false);
             }
         });
 
         speechGuide.setOnInitListener(this::speakWelcomeOptions);
 
-        buildUi();
         loadDetector();
         handleNfcIntent(getIntent());
 
@@ -192,7 +196,9 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
                     Manifest.permission.ACCESS_FINE_LOCATION
             }, REQ_AUDIO);
         } else {
-            voiceNav.setContinuousEnabled(settings.continuousVoiceEnabled);
+            if (voiceNav != null) {
+                voiceNav.setContinuousEnabled(settings.continuousVoiceEnabled);
+            }
         }
     }
 
@@ -705,9 +711,24 @@ public final class MainActivity extends AppCompatActivity implements VoiceNaviga
 
     @Override
     public void onSettingsCommand() {
-        runOnUiThread(() -> SettingsDialog.show(this, settings, () -> {
+        runOnUiThread(() -> SettingsDialog.show(this, settings, geminiAssistant, () -> {
             settings.load();
             guidanceEngine.reset();
+            ocrProcessor.setIntervalMs(settings.ocrIntervalMs);
+            if (voiceNav != null) {
+                voiceNav.setContinuousEnabled(settings.continuousVoiceEnabled);
+            }
+            if (geminiAssistant != null) {
+                geminiAssistant.initialize((isReady, msg) -> runOnUiThread(() -> {
+                    if (statusPill != null) {
+                        statusPill.setText(isReady ? "✨ Gemini AI" : "● Ready");
+                        statusPill.setTextColor(isReady ? 0xFF00E699 : 0xFFFFB020);
+                    }
+                    if (voiceStatusText != null) {
+                        voiceStatusText.setText(isReady ? "✨ " + msg + " · Tap anywhere to speak" : msg);
+                    }
+                }));
+            }
         }));
     }
 

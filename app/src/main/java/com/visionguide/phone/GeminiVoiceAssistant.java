@@ -95,6 +95,32 @@ final class GeminiVoiceAssistant {
         }
     }
 
+    void testApiKey(String testKey, AssistantStatusCallback callback) {
+        if (callback == null) return;
+        final String key = testKey != null ? testKey.trim() : "";
+        if (key.isEmpty()) {
+            callback.onStatusChanged(false, "❌ API key is empty");
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                String resp = callGeminiApi("Say 'OK' in one word.", key, PRIMARY_MODEL);
+                if (resp != null && !resp.trim().isEmpty()) {
+                    mainHandler.post(() -> callback.onStatusChanged(true, "✅ Connected! Gemini 3.5 Flash is ready."));
+                    return;
+                }
+                String fallbackResp = callGeminiApi("Say 'OK' in one word.", key, FALLBACK_MODEL);
+                if (fallbackResp != null && !fallbackResp.trim().isEmpty()) {
+                    mainHandler.post(() -> callback.onStatusChanged(true, "✅ Connected! (Gemini Flash fallback)"));
+                    return;
+                }
+                mainHandler.post(() -> callback.onStatusChanged(false, "❌ Invalid API key or network error"));
+            } catch (Exception e) {
+                mainHandler.post(() -> callback.onStatusChanged(false, "❌ Test failed: " + e.getMessage()));
+            }
+        });
+    }
+
     /**
      * Answers conversational queries and natural commands with deep spatial reasoning.
      */

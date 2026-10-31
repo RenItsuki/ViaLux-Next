@@ -21,7 +21,9 @@ android {
         if (localPropsFile.exists()) {
             localProps.load(localPropsFile.newDataInputStream())
         }
-        manifestPlaceholders = [MAPS_API_KEY: localProps.getProperty('MAPS_API_KEY', '')]
+        def mapsKey = localProps.getProperty('MAPS_API_KEY', '')
+        manifestPlaceholders = [MAPS_API_KEY: mapsKey]
+        buildConfigField "String", "MAPS_API_KEY", "\"${mapsKey}\""
     }
 
     buildFeatures {

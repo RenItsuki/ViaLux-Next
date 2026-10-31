@@ -50,7 +50,10 @@ final class AppSettings {
         roboflowApiKey     = prefs.getString("roboflowApiKey",   "");
 
         navigationEnabled  = prefs.getBoolean("navigationEnabled", true);
-        mapsApiKey         = prefs.getString("mapsApiKey",        "");
+        mapsApiKey         = prefs.getString("mapsApiKey", BuildConfig.MAPS_API_KEY);
+        if (mapsApiKey == null || mapsApiKey.isEmpty()) {
+            mapsApiKey = BuildConfig.MAPS_API_KEY;
+        }
 
         nfcEnabled         = prefs.getBoolean("nfcEnabled",  true);
 
